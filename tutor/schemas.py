@@ -84,3 +84,14 @@ class PlannerResult(BaseModel):
 # Planner -> Teacher   (round 2: Plan, Step)
 # Teacher -> Planner   (round 3: CheckResult)
 # ---------------------------------------------------------------------------
+
+class TeacherResult(BaseModel):
+    """The result of the teacher agent's attempt to teach a step"""
+
+    step: str = Field(description="The step that the teacher agent attempted to teach.")
+
+    explanation: str = Field(
+        description="The explanation that the teacher agent provided for the step."
+    )
+
+    
