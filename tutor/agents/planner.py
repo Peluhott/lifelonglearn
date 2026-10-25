@@ -16,4 +16,4 @@ def planner_node(state: TutorState) -> dict:
         content=state["intake"].model_dump_json(),
         schema=PlannerResult,
     )
-    return {"planner": result}
+    return {"planner": result, "planner_index": 0}  # start the teacher at the first step
