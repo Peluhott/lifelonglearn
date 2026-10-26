@@ -94,4 +94,29 @@ class TeacherResult(BaseModel):
         description="The explanation that the teacher agent provided for the step."
     )
 
+# ---------------------------------------------------------------------------
+# Teacher -> Reviewer
+# ---------------------------------------------------------------------------
+
+class ReviewQuestion(BaseModel):
+    """One multiple choice question checking understanding of a single taught step"""
+
+    step: str = Field(description="The step that this question checks for understanding of.")
+
+    question: str = Field(description="The multiple choice question to ask the student.")
+
+    choices: list[str] = Field(
+        description="Exactly 4 possible answers to the question, one correct and 3 plausible wrong answers, in a random order."
+    )
+
+    correct_answer: str = Field(
+        description="The correct answer, copied exactly as it appears in choices."
+    )
+
+class ReviewerResult(BaseModel):
+    """The questions the reviewer agent wrote to check for understanding of what was taught"""
+
+    questions: list[ReviewQuestion] = Field(
+        description="One multiple choice question for each step that was taught, in the same order as the steps."
+    )
     
