@@ -30,8 +30,9 @@ def sse(event: str, data: dict) -> str:
 
 
 def events(prompt: str):
-    """Run the graph and yield an SSE frame each time a node finishes."""
+    """Run the graph and yield SSE frames: intake, plan, all lessons in one chunk, then all questions in one chunk."""
     total = 0
+    lessons = []  # taught steps are held here while the teacher loops, then sent together
     try:
         # "updates" mode yields {node_name: what_that_node_returned} after every node runs
         for update in graph.stream(
@@ -44,14 +45,19 @@ def events(prompt: str):
                     yield sse("intake", output["intake"].model_dump())
                 elif node == "planner":
                     plan = output["planner"]
-                    total = len(plan.steps)  # remember how many steps so each step event can say "2 of 5"
+                    total = len(plan.steps)  # remember how many steps so each lesson can say "2 of 5"
                     yield sse("plan", plan.model_dump())
                 elif node == "teacher":
                     result = output["teacher"][0]  # teacher returns a one-item list so the state appends it
                     index = output["planner_index"] - 1  # teacher already moved the index past the step it taught
-                    yield sse("step", {"index": index, "total": total, **result.model_dump()})
+                    lessons.append({"index": index, "total": total, **result.model_dump()})
+                    if index + 1 == total:  # last step taught: send every lesson now, while the reviewer writes questions
+                        yield sse("lessons", {"lessons": lessons})
+                        lessons = []
                 elif node == "reviewer" and output:  # reviewer returns {} (None here) when nothing was taught
                     yield sse("review", output["reviewer"].model_dump())
+        if lessons:  # safety net in case the graph stops before the last step
+            yield sse("lessons", {"lessons": lessons})
         yield sse("done", {})
     except Exception as e:
         # the 200 response has already started by now, so errors have to be sent inside the stream

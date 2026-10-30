@@ -92,29 +92,177 @@
   color: var(--error);
 }
 
-/* small muted line above a step, e.g. "Step 1 of 4 · ..." */
-.msg-label {
-  font-size: 14px;
-  color: var(--muted);
+/* ---------- pager: lessons and quiz, one page at a time (styled after the quiz panel in reference/Lifetime Tutor) ---------- */
+.pager {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.pager-top {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pager-count {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.plan-steps {
+  margin: 8px 0 0;
+  padding-left: 24px;
+}
+
+.lesson-title {
+  font-weight: 600;
   margin-bottom: 4px;
 }
 
-.question {
-  margin-top: 12px;
+.progress {
+  display: grid;
+  gap: 5px;
 }
 
-.question ol {
-  margin: 4px 0;
-  padding-left: 24px;
-  list-style: upper-alpha;
+.progress-seg {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--hairline);
 }
 
-.question summary {
+.progress-seg.on {
+  background: var(--accent);
+}
+
+.question-text {
+  font-size: 17px;
+  line-height: 1.5;
+}
+
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1.5px solid var(--input-border);
+  background: #fff;
+  color: var(--ink);
+  font: 500 15px/1.4 var(--font-body);
+  text-align: left;
+  white-space: normal;
   cursor: pointer;
-  font-size: 14px;
-  color: var(--accent-text);
 }
 
+.choice:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.choice:disabled {
+  cursor: default;
+}
+
+/* the letter in a circle */
+.choice-key {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1.5px solid var(--input-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--muted);
+  flex: none;
+}
+
+.choice.right {
+  border-color: var(--accent);
+  background: var(--right-bg);
+}
+
+.choice.wrong {
+  border-color: var(--wrong);
+  background: var(--wrong-bg);
+}
+
+.choice.right .choice-key,
+.choice.wrong .choice-key {
+  color: #fff;
+  border-color: transparent;
+}
+
+.choice.right .choice-key {
+  background: var(--accent);
+}
+
+.choice.wrong .choice-key {
+  background: var(--wrong);
+}
+
+.feedback {
+  padding: 14px 16px;
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.feedback strong {
+  font-weight: 600;
+}
+
+.feedback.right {
+  background: var(--feedback-right-bg);
+}
+
+.feedback.wrong {
+  background: var(--feedback-wrong-bg);
+}
+
+.pager-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.pager-back,
+.pager-next {
+  font: 600 14px var(--font-body);
+  padding: 11px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.pager-back {
+  border: 1px solid rgba(43, 39, 35, 0.18);
+  background: transparent;
+  color: var(--ink);
+}
+
+.pager-next {
+  border: none;
+  background: var(--accent);
+  color: #fff;
+}
+
+.pager-back:disabled,
+.pager-next:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.score {
+  font-weight: 600;
+}
+
+/* what the tutor is doing right now: Planning…, Writing up the lessons…, Generating questions… */
 .thinking {
   font-size: 14px;
   color: var(--muted);
