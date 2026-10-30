@@ -2,3 +2,5 @@ google-genai
 langgraph
 pydantic
 python-dotenv
+fastapi
+uvicorn[standard]
