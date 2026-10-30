@@ -106,7 +106,7 @@ class ReviewQuestion(BaseModel):
     question: str = Field(description="The multiple choice question to ask the student.")
 
     choices: list[str] = Field(
-        description="Exactly 4 possible answers to the question, one correct and 3 plausible wrong answers, in a random order."
+        description="Exactly 4 possible answers, one correct and 3 wrong answers based on common misconceptions about the step (or plausible wrong answers if there are none), in a random order."
     )
 
     correct_answer: str = Field(
