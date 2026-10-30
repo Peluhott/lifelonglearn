@@ -1,0 +1,39 @@
+/* design tokens from the Tutor Chat handoff */
+:root {
+  --bg: #f6f3ec;                        /* page background */
+  --surface: #fffdf8;                   /* composer */
+  --ink: #2b2723;                       /* primary text */
+  --ink-2: #4a443d;                     /* secondary text */
+  --muted: #6e665d;                     /* loading text, step labels */
+  --placeholder: #8f8a82;
+  --accent: #3a6b3d;                    /* logo, send button */
+  --accent-text: #295a2c;               /* links */
+  --error: #9f422b;
+  --hairline: rgba(43, 39, 35, 0.1);    /* header border */
+  --input-border: rgba(43, 39, 35, 0.16);
+  --bubble: rgba(43, 39, 35, 0.07);     /* user message background */
+
+  --font-display: 'Spectral', serif;
+  --font-body: 'Hanken Grotesk', sans-serif;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+}
+
+a {
+  color: var(--accent-text);
+}
+
+a:hover {
+  opacity: 0.75;
+}

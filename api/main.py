@@ -50,6 +50,8 @@ def events(prompt: str):
                     result = output["teacher"][0]  # teacher returns a one-item list so the state appends it
                     index = output["planner_index"] - 1  # teacher already moved the index past the step it taught
                     yield sse("step", {"index": index, "total": total, **result.model_dump()})
+                elif node == "reviewer" and output:  # reviewer returns {} (None here) when nothing was taught
+                    yield sse("review", output["reviewer"].model_dump())
         yield sse("done", {})
     except Exception as e:
         # the 200 response has already started by now, so errors have to be sent inside the stream
