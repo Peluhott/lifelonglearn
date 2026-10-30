@@ -7,3 +7,5 @@ print(final_state["planner"].model_dump_json(indent=2))
 for result in final_state.get("teacher", []):
     print(result.model_dump_json(indent=2))
 print("All steps covered")
+if "reviewer" in final_state:
+    print(final_state["reviewer"].model_dump_json(indent=2))

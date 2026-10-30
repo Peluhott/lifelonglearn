@@ -5,11 +5,12 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
+from langsmith import wrappers
 
 load_dotenv()
 
 MODEL = os.getenv("LLM_MODEL", "gemini-3.5-flash")
-client = genai.Client()
+client = wrappers.wrap_gemini(genai.Client())
 
 T = TypeVar("T", bound=BaseModel)   
 
