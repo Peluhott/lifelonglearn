@@ -1,5 +1,5 @@
 // where the FastAPI backend runs; override with VITE_API_URL in frontend/.env if it moves
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 // Send the student's prompt to the tutor graph and call onEvent(event, data) for every
 // Server-Sent Event it streams back (intake, plan, step, review, done, error).

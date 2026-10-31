@@ -120,6 +120,14 @@
   margin-bottom: 4px;
 }
 
+.lesson-image {
+  display: block;
+  max-width: 100%;
+  margin-top: 16px;
+  border-radius: 10px;
+  border: 1px solid var(--hairline);
+}
+
 .progress {
   display: grid;
   gap: 5px;

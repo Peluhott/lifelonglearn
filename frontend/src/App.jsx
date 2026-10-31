@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { streamTutor } from './api.js'
+import { API_URL, streamTutor } from './api.js'
 import './App.css'
 
 const ERROR_TEXT = 'Something went wrong. Please try again.'
@@ -197,6 +197,8 @@ function Lesson({ plan, lessons, questionsReady, onContinue }) {
         <div>
           <div className="lesson-title">{lesson.step}</div>
           {lesson.explanation}
+          {/* only steps where the teacher asked for a picture have one */}
+          {lesson.image_url && <img className="lesson-image" src={API_URL + lesson.image_url} alt={lesson.image_prompt} />}
         </div>
       )}
 
