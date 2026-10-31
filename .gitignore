@@ -15,3 +15,6 @@ __pycache__/
 .vscode/
 .idea/
 .DS_Store
+
+# Images made by the image tool
+generated_images/
