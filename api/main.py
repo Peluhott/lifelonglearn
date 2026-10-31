@@ -3,11 +3,17 @@ import json
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from tutor.graph import graph
+from tutor.tools.images import IMAGES_DIR
 
 app = FastAPI(title="Tutor API")
+
+# serve the teacher's generated images at /images/<file name>
+IMAGES_DIR.mkdir(exist_ok=True)  # StaticFiles needs the folder to exist at startup
+app.mount("/images", StaticFiles(directory=IMAGES_DIR), name="images")
 
 # let a local frontend dev server call this API from the browser
 app.add_middleware(
@@ -50,7 +56,8 @@ def events(prompt: str):
                 elif node == "teacher":
                     result = output["teacher"][0]  # teacher returns a one-item list so the state appends it
                     index = output["planner_index"] - 1  # teacher already moved the index past the step it taught
-                    lessons.append({"index": index, "total": total, **result.model_dump()})
+                    image_url = f"/images/{result.image}" if result.image else None  # the frontend adds the API's address
+                    lessons.append({"index": index, "total": total, **result.model_dump(), "image_url": image_url})
                     if index + 1 == total:  # last step taught: send every lesson now, while the reviewer writes questions
                         yield sse("lessons", {"lessons": lessons})
                         lessons = []

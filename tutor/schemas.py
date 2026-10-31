@@ -94,6 +94,19 @@ class TeacherResult(BaseModel):
         description="The explanation that the teacher agent provided for the step."
     )
 
+    image_prompt: Optional[str] = Field(
+        None,
+        description="Only when a picture would really help with this step (a diagram, a process, "
+        "what something looks like): a short description of the image to draw. Leave empty otherwise.",
+    )
+
+
+class TaughtStep(TeacherResult):
+    """A TeacherResult plus what the teacher node added after the model answered.
+    Kept separate so the model never sees or fills these fields."""
+
+    image: Optional[str] = Field(None, description="File name of the generated image, if one was made.")
+
 # ---------------------------------------------------------------------------
 # Teacher -> Reviewer
 # ---------------------------------------------------------------------------
