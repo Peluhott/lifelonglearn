@@ -6,3 +6,5 @@ fastapi
 uvicorn[standard]
 langsmith
 pytest
+langgraph-checkpoint-postgres
+psycopg[binary,pool]

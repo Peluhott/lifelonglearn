@@ -35,4 +35,10 @@ builder.add_conditional_edges("planner", teach_every_step, ["teacher", "reviewer
 builder.add_edge("teacher", "reviewer")  # waits for every parallel teacher to finish, then runs once
 builder.add_edge("reviewer", END)
 
-graph = builder.compile()               # turn the blueprint into something runnable
+
+def build_graph(checkpointer=None):
+    """Compile the graph; with a checkpointer, every run's state is saved under its thread_id."""
+    return builder.compile(checkpointer=checkpointer)
+
+
+graph = build_graph()                   # no saving: used by the CLI and tests
