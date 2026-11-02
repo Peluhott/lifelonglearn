@@ -12,6 +12,7 @@ from tutor.schemas import (
     FollowUpResult,
     IntakeResult,
     PlannerResult,
+    ReteachResult,
     ReviewerResult,
     ReviewQuestion,
     TeacherResult,
@@ -66,6 +67,19 @@ class FakeLLM:
                     )
                     for step in taught
                 ]
+            )
+        if schema is ReteachResult:
+            step = re.search(r"^Step: (.*)$", content, re.MULTILINE).group(1)
+            picked = re.search(r"^Student picked: (.*)$", content, re.MULTILINE).group(1)
+            return ReteachResult(
+                misconception=f"thinks {picked}",
+                explanation=f"another look at {step}",
+                question=ReviewQuestion(
+                    step=step,
+                    question=f"retry question about {step}?",
+                    choices=["right", "wrong 1", "wrong 2", "wrong 3"],
+                    correct_answer="right",
+                ),
             )
         if schema is FollowUpResult:
             step = re.search(r"^Step: (.*)$", content, re.MULTILINE).group(1)

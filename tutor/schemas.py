@@ -151,3 +151,56 @@ class FollowUp(BaseModel):
     index: int = Field(description="Position of the step it was asked about (0-based).")
     question: str
     answer: str
+
+# ---------------------------------------------------------------------------
+# Reviewer -> Grader -> Reteacher -> Grader ...   (the quiz rounds)
+# ---------------------------------------------------------------------------
+
+class QuizQuestion(ReviewQuestion):
+    """A ReviewQuestion tied to the plan step it checks; the index is added by code, never by the model."""
+
+    index: int = Field(description="Position of the step this question checks (0-based).")
+
+
+class GradedAnswer(BaseModel):
+    """How the student did on one quiz question, filled in by the grader node (plain Python, no model)."""
+
+    index: int = Field(description="Position of the step the question checks (0-based).")
+    step: str
+    question: str
+    choices: list[str]
+    picked: str
+    correct_answer: str
+    is_correct: bool
+
+
+class GraderResult(BaseModel):
+    """One graded quiz round: round 1 is the reviewer's quiz, later rounds re-check retaught steps."""
+
+    round: int
+    answers: list[GradedAnswer]
+
+
+class ReteachResult(BaseModel):
+    """A second try at teaching a step the student got wrong, aimed at the misconception behind their answer"""
+
+    misconception: str = Field(
+        description="In one or two sentences, what the student probably believes, judging by the wrong answer "
+        "they picked, written to the student (e.g. 'You might be thinking that...')."
+    )
+    explanation: str = Field(
+        description="A new explanation of the step that clears up that misconception, from a different angle "
+        "than the explanations the student already read."
+    )
+    question: ReviewQuestion = Field(
+        description="A new multiple choice question on the same step, different from the one they missed, "
+        "to check whether the misconception is cleared up."
+    )
+
+
+class RetaughtStep(ReteachResult):
+    """A ReteachResult plus what the reteacher node added after the model answered."""
+
+    step: str = Field(description="The plan step that was retaught.")
+    index: int = Field(description="Position of that step in the plan (0-based).")
+    round: int = Field(description="The quiz round whose miss caused this reteach.")

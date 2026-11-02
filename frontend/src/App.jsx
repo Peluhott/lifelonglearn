@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { API_URL, askAboutStep, deleteSession, getSession, listSessions, streamTutor } from './api.js'
+import {
+  API_URL,
+  askAboutStep,
+  deleteSession,
+  getSession,
+  listSessions,
+  resumeSession,
+  streamTutor,
+  submitAnswers,
+} from './api.js'
 import './App.css'
 
 const ERROR_TEXT = 'Something went wrong. Please try again.'
@@ -11,7 +20,7 @@ function App() {
   const [messages, setMessages] = useState([])
   const [draft, setDraft] = useState('')
   const [status, setStatus] = useState(null) // what the tutor is doing right now ("Planning…"), null when idle
-  const [pendingQuestions, setPendingQuestions] = useState(null) // review questions held back until the student clicks to continue
+  const [pendingQuiz, setPendingQuiz] = useState(null) // { round, questions } held back until the student clicks to continue
   const [sessions, setSessions] = useState([]) // past sessions for the sidebar
   const [sessionId, setSessionId] = useState(null) // the session on screen, null for a new lesson
   const [confirmingDelete, setConfirmingDelete] = useState(null) // id of the sidebar row asking "Delete?"
@@ -19,6 +28,7 @@ function App() {
   const [asking, setAsking] = useState(null) // { index, question } waiting for an answer
   const [askFailed, setAskFailed] = useState(null) // step index whose last question failed
   const shownSession = useRef(null) // sessionId without waiting for a render, for answers that arrive late
+  const gradedThisRun = useRef(false) // an answer run that fails after grading leaves the graph stalled, not waiting
   const scrollRef = useRef(null)
   const textareaRef = useRef(null)
   const loading = status !== null
@@ -84,16 +94,47 @@ function App() {
     } else if (event === 'lessons') {
       addLessons(data.lessons)
       setStatus('Generating questions…')
-    } else if (event === 'review') {
-      setPendingQuestions(data.questions) // don't show yet, "Continue to questions" on the last step reveals them
+    } else if (event === 'quiz') {
+      setPendingQuiz(data) // don't show yet: the last lesson or reteach page has a button that reveals it
+    } else if (event === 'grade') {
+      gradedThisRun.current = true
+      setMessages((prev) => prev.map((m) => (m.kind === 'review' && m.round === data.round ? { ...m, grade: data } : m)))
+      if (data.score < data.total) setStatus('Taking another look at what you missed…')
+    } else if (event === 'reteach') {
+      addMessage({ role: 'assistant', kind: 'reteach', steps: data.steps })
     } else if (event === 'error') {
-      addMessage({ role: 'assistant', kind: 'text', content: ERROR_TEXT, error: true })
+      // after grading, the graph is stuck between nodes and needs a resume, not new answers
+      addMessage({ role: 'assistant', kind: 'text', content: ERROR_TEXT, error: true, retry: gradedThisRun.current })
     }
     // 'intake' and 'done' don't show anything; "Planning…" covers intake and finally clears the status
   }
 
+  // stream an answer run (grade, then any reteach and next quiz) into the thread
+  const runAnswers = async (start, startStatus) => {
+    gradedThisRun.current = false
+    setStatus(startStatus)
+    try {
+      await start(onEvent)
+    } catch {
+      addMessage({ role: 'assistant', kind: 'text', content: ERROR_TEXT, error: true, retry: gradedThisRun.current })
+    } finally {
+      setStatus(null)
+    }
+  }
+
+  const submitQuiz = (picks) => {
+    if (loading) return
+    runAnswers((onEv) => submitAnswers(sessionId, picks, onEv), 'Checking your answers…')
+  }
+
+  const retryRun = () => {
+    if (loading) return
+    setMessages((prev) => prev.filter((m) => !m.retry))
+    runAnswers((onEv) => resumeSession(sessionId, onEv), 'Taking another look at what you missed…')
+  }
+
   const lesson = messages.find((m) => m.kind === 'lesson')
-  const quizShowing = messages.some((m) => m.kind === 'review')
+  const quizShowing = messages.some((m) => m.kind === 'review' || m.kind === 'reteach')
   // with a finished lesson on screen, the composer asks about the step being read
   const askMode = Boolean(sessionId && lesson?.lessons && !quizShowing)
 
@@ -106,7 +147,7 @@ function App() {
     showSession(null)
     setDraft('')
     setStatus('Planning…')
-    setPendingQuestions(null)
+    setPendingQuiz(null)
     try {
       await streamTutor(text, onEvent)
     } catch {
@@ -121,7 +162,7 @@ function App() {
     if (loading) return
     setMessages([])
     showSession(null)
-    setPendingQuestions(null)
+    setPendingQuiz(null)
   }
 
   const removeSession = async (id) => {
@@ -157,18 +198,25 @@ function App() {
     }
   }
 
-  // rebuild a saved session the way it looked when its lessons finished (the quiz starts fresh)
+  // rebuild a saved session: the lesson until the first quiz is answered, then every graded round and reteach
   const openSession = async (id) => {
     if (loading || id === sessionId) return
     showSession(id)
-    setPendingQuestions(null)
+    setPendingQuiz(null)
     try {
       const saved = await getSession(id)
-      setMessages([
-        { role: 'user', kind: 'text', content: saved.prompt },
-        ...(saved.plan ? [{ role: 'assistant', kind: 'lesson', plan: saved.plan, lessons: saved.lessons, followups: saved.followups ?? [] }] : []),
-      ])
-      setPendingQuestions(saved.review ? saved.review.questions : null)
+      const rebuilt = [{ role: 'user', kind: 'text', content: saved.prompt }]
+      if (!saved.rounds.length && saved.plan) {
+        rebuilt.push({ role: 'assistant', kind: 'lesson', plan: saved.plan, lessons: saved.lessons, followups: saved.followups })
+      }
+      for (const { grade, reteach } of saved.rounds) {
+        // a graded answer carries its question and choices, so it can stand in for the question
+        rebuilt.push({ role: 'assistant', kind: 'review', round: grade.round, questions: grade.answers, grade })
+        if (reteach.steps.length) rebuilt.push({ role: 'assistant', kind: 'reteach', steps: reteach.steps })
+      }
+      if (saved.stalled) rebuilt.push({ role: 'assistant', kind: 'text', content: ERROR_TEXT, error: true, retry: true })
+      setMessages(rebuilt)
+      setPendingQuiz(saved.waiting)
     } catch {
       setMessages([{ role: 'assistant', kind: 'text', content: "Couldn't open that lesson.", error: true }])
     }
@@ -182,14 +230,20 @@ function App() {
     }
   }
 
-  // swap this lesson's plan and lessons for the quiz: keep everything up to the student's last message
+  // show the waiting quiz: the first one replaces the lesson, later rounds go below the reteach that led to them
   const showQuestions = () => {
+    const quiz = { role: 'assistant', kind: 'review', round: pendingQuiz.round, questions: pendingQuiz.questions, grade: null }
     setMessages((prev) => {
+      if (prev.at(-1)?.kind !== 'lesson') return [...prev, quiz]
       const lastUser = prev.findLastIndex((m) => m.role === 'user')
-      return [...prev.slice(0, lastUser + 1), { role: 'assistant', kind: 'review', questions: pendingQuestions }]
+      return [...prev.slice(0, lastUser + 1), quiz]
     })
-    setPendingQuestions(null)
+    setPendingQuiz(null)
   }
+
+  const quizzes = messages.filter((m) => m.kind === 'review')
+  // finished: the last thing on screen is a graded quiz and nothing else is coming
+  const finished = !loading && !pendingQuiz && messages.at(-1)?.kind === 'review' && messages.at(-1).grade
 
   const onPlanPage = askMode && page === 0
   const cantSend = loading || !draft.trim() || onPlanPage || quizShowing || asking !== null
@@ -261,13 +315,31 @@ function App() {
                     asking={asking}
                     askFailed={askFailed}
                     // only the newest lesson can move on to the questions that just came back
-                    questionsReady={i === messages.length - 1 && pendingQuestions !== null}
+                    questionsReady={i === messages.length - 1 && pendingQuiz !== null}
+                    onContinue={showQuestions}
+                  />
+                ) : m.kind === 'review' ? (
+                  <Quiz
+                    key={`${sessionId}-${i}`}
+                    round={m.round}
+                    questions={m.questions}
+                    grade={m.grade}
+                    canSubmit={!loading && !m.grade}
+                    onSubmit={submitQuiz}
+                  />
+                ) : m.kind === 'reteach' ? (
+                  <Reteach
+                    key={`${sessionId}-${i}`}
+                    steps={m.steps}
+                    questionsReady={i === messages.length - 1 && pendingQuiz !== null}
                     onContinue={showQuestions}
                   />
                 ) : (
-                  <Message key={`${sessionId}-${i}`} message={m} />
+                  <Message key={`${sessionId}-${i}`} message={m} onRetry={retryRun} retryDisabled={loading} />
                 ),
               )}
+
+              {finished && <Summary quizzes={quizzes} />}
 
               {status && <div className="thinking">{status}</div>}
             </div>
@@ -295,18 +367,19 @@ function App() {
   )
 }
 
-function Message({ message }) {
+function Message({ message, onRetry, retryDisabled }) {
   if (message.role === 'user') {
     return <div className="msg msg-user">{message.content}</div>
-  }
-
-  if (message.kind === 'review') {
-    return <Quiz questions={message.questions} />
   }
 
   return (
     <div className={`msg msg-tutor${message.error ? ' msg-error' : ''}`}>
       {message.content}
+      {message.retry && (
+        <button className="retry" onClick={onRetry} disabled={retryDisabled}>
+          Try again
+        </button>
+      )}
     </div>
   )
 }
@@ -403,27 +476,24 @@ function StepQuestions({ followups, asking, failed }) {
 
 const LETTERS = ['A', 'B', 'C', 'D']
 
-// trim so a stray space from the model doesn't make the right answer look wrong
-const isCorrect = (choice, q) => choice.trim() === q.correct_answer.trim()
-
-// the review questions as clickable multiple choice, one at a time with Back / Next;
-// each question locks after the first pick
-function Quiz({ questions }) {
+// one quiz round, one question at a time. Picks can change until "Check answers" sends them to the grader node;
+// once its grade arrives the quiz locks and shows right / wrong for each question
+function Quiz({ round, questions, grade, canSubmit, onSubmit }) {
   const [picks, setPicks] = useState({}) // question index -> the choice the student clicked
   const [current, setCurrent] = useState(0) // which question is on screen
-  const answered = Object.keys(picks).length
-  const score = questions.filter((q, i) => picks[i] !== undefined && isCorrect(picks[i], q)).length
 
+  const results = grade?.answers // same order as questions
+  const shownPicks = results ? Object.fromEntries(results.map((a, i) => [i, a.picked])) : picks
+  const answered = Object.keys(shownPicks).length
   const q = questions[current]
-  const pick = picks[current]
-  const done = pick !== undefined
+  const result = results?.[current]
   const isLast = current === questions.length - 1
 
   return (
     <div className="msg msg-tutor pager">
       <div className="pager-top">
         <span className="pager-count">
-          Question {current + 1} of {questions.length}
+          {round > 1 ? 'New questions · ' : ''}Question {current + 1} of {questions.length}
         </span>
         <Progress count={questions.length} current={current} />
       </div>
@@ -432,13 +502,14 @@ function Quiz({ questions }) {
 
       <div className="choices">
         {q.choices.map((choice, j) => {
-          const right = done && isCorrect(choice, q) // always reveal the right answer once they've picked
-          const wrong = done && choice === pick && !isCorrect(choice, q)
+          const right = result && choice.trim() === result.correct_answer.trim()
+          const wrong = result && choice === result.picked && !result.is_correct
+          const picked = !result && choice === shownPicks[current]
           return (
             <button
               key={choice}
-              className={`choice${right ? ' right' : ''}${wrong ? ' wrong' : ''}`}
-              disabled={done}
+              className={`choice${right ? ' right' : ''}${wrong ? ' wrong' : ''}${picked ? ' picked' : ''}`}
+              disabled={!canSubmit}
               onClick={() => setPicks((prev) => ({ ...prev, [current]: choice }))}
             >
               <span className="choice-key">{LETTERS[j]}</span>
@@ -448,9 +519,9 @@ function Quiz({ questions }) {
         })}
       </div>
 
-      {done && (
-        <div className={`feedback ${isCorrect(pick, q) ? 'right' : 'wrong'}`}>
-          {isCorrect(pick, q) ? (
+      {result && (
+        <div className={`feedback ${result.is_correct ? 'right' : 'wrong'}`}>
+          {result.is_correct ? (
             <strong>Right.</strong>
           ) : (
             <>
@@ -464,15 +535,100 @@ function Quiz({ questions }) {
         <button className="pager-back" onClick={() => setCurrent(current - 1)} disabled={current === 0}>
           ← Back
         </button>
-        <button className="pager-next" onClick={() => setCurrent(current + 1)} disabled={isLast}>
-          Next question →
-        </button>
+        {isLast && !grade ? (
+          <button
+            className="pager-next"
+            onClick={() => onSubmit(questions.map((_, i) => picks[i]))}
+            disabled={!canSubmit || answered < questions.length}
+          >
+            Check answers
+          </button>
+        ) : (
+          <button className="pager-next" onClick={() => setCurrent(current + 1)} disabled={isLast}>
+            Next question →
+          </button>
+        )}
       </div>
 
-      {answered === questions.length && (
+      {grade ? (
         <div className="score">
-          You got {score} of {questions.length} right.
+          You got {grade.score} of {grade.total} right.
         </div>
+      ) : (
+        <div className="quiz-hint">
+          {answered} of {questions.length} answered
+        </div>
+      )}
+    </div>
+  )
+}
+
+// another look at each missed step: what the wrong answer suggests they believe, then a new explanation;
+// the last page moves on to the new questions
+function Reteach({ steps, questionsReady, onContinue }) {
+  const [page, setPage] = useState(0)
+  const step = steps[page]
+  const isLast = page === steps.length - 1
+
+  return (
+    <div className="msg msg-tutor pager">
+      <div className="pager-top">
+        <span className="pager-count">
+          Another look · {page + 1} of {steps.length}
+        </span>
+        <Progress count={steps.length} current={page} />
+      </div>
+
+      <div>
+        <div className="lesson-title">{step.step}</div>
+        <div className="misconception">
+          <strong>What might be tripping you up:</strong> {step.misconception}
+        </div>
+        {step.explanation}
+      </div>
+
+      <div className="pager-nav">
+        <button className="pager-back" onClick={() => setPage(page - 1)} disabled={page === 0}>
+          ← Back
+        </button>
+        {isLast ? (
+          <button className="pager-next" onClick={onContinue} disabled={!questionsReady}>
+            Try the new questions →
+          </button>
+        ) : (
+          <button className="pager-next" onClick={() => setPage(page + 1)}>
+            Next →
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// end of the lesson: the first-try score, and any step still missed after its retries
+function Summary({ quizzes }) {
+  const latest = new Map() // step index -> its most recent graded answer
+  for (const quiz of quizzes) for (const answer of quiz.grade.answers) latest.set(answer.index, answer)
+  const shaky = [...latest.values()].filter((a) => !a.is_correct)
+  const first = quizzes[0].grade
+
+  return (
+    <div className="msg msg-tutor summary">
+      <div className="lesson-title">{shaky.length ? 'Lesson finished' : 'Every step checked out'}</div>
+      <p>
+        First try: {first.score} of {first.total} right.
+        {quizzes.length > 1 && ` After another look, ${latest.size - shaky.length} of ${latest.size} steps are solid.`}
+      </p>
+      {shaky.length > 0 && (
+        <>
+          <strong>Still needs work</strong>
+          <ul className="plan-steps">
+            {shaky.map((a) => (
+              <li key={a.index}>{a.step}</li>
+            ))}
+          </ul>
+          <p>Start a new lesson on one of these to dig in further.</p>
+        </>
       )}
     </div>
   )

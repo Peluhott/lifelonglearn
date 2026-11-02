@@ -350,6 +350,18 @@
   flex: none;
 }
 
+/* picked but not graded yet: the grader node reveals right and wrong after "Check answers" */
+.choice.picked {
+  border-color: var(--ink);
+  background: var(--bubble);
+}
+
+.choice.picked .choice-key {
+  background: var(--ink);
+  border-color: transparent;
+  color: #fff;
+}
+
 .choice.right {
   border-color: var(--accent);
   background: var(--right-bg);
@@ -427,6 +439,59 @@
 
 .score {
   font-weight: 600;
+}
+
+.quiz-hint {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+/* ---------- reteach and end-of-lesson summary ---------- */
+.misconception {
+  margin: 8px 0 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--feedback-wrong-bg);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.misconception strong {
+  font-weight: 600;
+}
+
+.summary {
+  padding: 18px 20px;
+  border-radius: 14px;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+.summary p {
+  margin: 8px 0 0;
+}
+
+.summary > strong {
+  display: block;
+  margin-top: 14px;
+  font-weight: 600;
+}
+
+.retry {
+  display: block;
+  margin-top: 10px;
+  font: 600 14px var(--font-body);
+  padding: 9px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--input-border);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.retry:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* ---------- questions about a lesson step ---------- */
