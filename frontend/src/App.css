@@ -429,6 +429,38 @@
   font-weight: 600;
 }
 
+/* ---------- questions about a lesson step ---------- */
+.step-questions {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--hairline);
+}
+
+.followup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.followup-q {
+  align-self: flex-end;
+  max-width: 80%;
+  background: var(--bubble);
+  border-radius: 14px;
+  padding: 10px 14px;
+}
+
+.followup-a {
+  white-space: pre-wrap;
+}
+
+.ask-error {
+  font-size: 14px;
+}
+
 /* what the tutor is doing right now: Planning…, Writing up the lessons…, Generating questions… */
 .thinking {
   font-size: 14px;

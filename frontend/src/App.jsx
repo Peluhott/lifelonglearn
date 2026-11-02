@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { API_URL, deleteSession, getSession, listSessions, streamTutor } from './api.js'
+import { API_URL, askAboutStep, deleteSession, getSession, listSessions, streamTutor } from './api.js'
 import './App.css'
 
 const ERROR_TEXT = 'Something went wrong. Please try again.'
@@ -15,9 +15,22 @@ function App() {
   const [sessions, setSessions] = useState([]) // past sessions for the sidebar
   const [sessionId, setSessionId] = useState(null) // the session on screen, null for a new lesson
   const [confirmingDelete, setConfirmingDelete] = useState(null) // id of the sidebar row asking "Delete?"
+  const [page, setPage] = useState(0) // the lesson pager's page: 0 is the plan, 1..n are the steps
+  const [asking, setAsking] = useState(null) // { index, question } waiting for an answer
+  const [askFailed, setAskFailed] = useState(null) // step index whose last question failed
+  const shownSession = useRef(null) // sessionId without waiting for a render, for answers that arrive late
   const scrollRef = useRef(null)
   const textareaRef = useRef(null)
   const loading = status !== null
+
+  // every switch of what's on screen goes through here, so the pager and any pending question start over
+  const showSession = (id) => {
+    shownSession.current = id
+    setSessionId(id)
+    setPage(0)
+    setAsking(null)
+    setAskFailed(null)
+  }
 
   const refreshSessions = () =>
     listSessions()
@@ -42,7 +55,7 @@ function App() {
   useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [messages, status])
+  }, [messages, status, asking])
 
   // grow the textarea with its content (CSS caps it at 160px)
   useEffect(() => {
@@ -64,9 +77,9 @@ function App() {
   // turn each event from the tutor graph into what the student sees
   const onEvent = (event, data) => {
     if (event === 'session') {
-      setSessionId(data.id)
+      showSession(data.id)
     } else if (event === 'plan') {
-      addMessage({ role: 'assistant', kind: 'lesson', plan: data, lessons: null }) // lessons arrive later
+      addMessage({ role: 'assistant', kind: 'lesson', plan: data, lessons: null, followups: [] }) // lessons arrive later
       setStatus('Writing up the lessons…')
     } else if (event === 'lessons') {
       addLessons(data.lessons)
@@ -79,12 +92,18 @@ function App() {
     // 'intake' and 'done' don't show anything; "Planning…" covers intake and finally clears the status
   }
 
+  const lesson = messages.find((m) => m.kind === 'lesson')
+  const quizShowing = messages.some((m) => m.kind === 'review')
+  // with a finished lesson on screen, the composer asks about the step being read
+  const askMode = Boolean(sessionId && lesson?.lessons && !quizShowing)
+
   const send = async () => {
     const text = draft.trim()
     if (!text || loading) return
-    // every message is its own saved session, so start from a clean screen
+    if (askMode) return askStep(page - 1, text)
+    // every new topic is its own saved session, so start from a clean screen
     setMessages([{ role: 'user', kind: 'text', content: text }])
-    setSessionId(null)
+    showSession(null)
     setDraft('')
     setStatus('Planning…')
     setPendingQuestions(null)
@@ -101,7 +120,7 @@ function App() {
   const newLesson = () => {
     if (loading) return
     setMessages([])
-    setSessionId(null)
+    showSession(null)
     setPendingQuestions(null)
   }
 
@@ -116,16 +135,38 @@ function App() {
     if (id === sessionId) newLesson()
   }
 
+  // answer a question about one step (0-based) and show it under that step; the pager stays where it is
+  const askStep = async (index, question) => {
+    if (index < 0 || asking) return
+    const id = sessionId
+    setDraft('')
+    setAsking({ index, question })
+    setAskFailed(null)
+    try {
+      const followup = await askAboutStep(id, index, question)
+      if (shownSession.current !== id) return // the student opened another lesson while waiting
+      setMessages((prev) =>
+        prev.map((m) => (m.kind === 'lesson' ? { ...m, followups: [...m.followups, followup] } : m)),
+      )
+      setAsking(null)
+    } catch {
+      if (shownSession.current !== id) return
+      setDraft((current) => current || question) // give the question back so it can be sent again
+      setAskFailed(index)
+      setAsking(null)
+    }
+  }
+
   // rebuild a saved session the way it looked when its lessons finished (the quiz starts fresh)
   const openSession = async (id) => {
     if (loading || id === sessionId) return
-    setSessionId(id)
+    showSession(id)
     setPendingQuestions(null)
     try {
       const saved = await getSession(id)
       setMessages([
         { role: 'user', kind: 'text', content: saved.prompt },
-        ...(saved.plan ? [{ role: 'assistant', kind: 'lesson', plan: saved.plan, lessons: saved.lessons }] : []),
+        ...(saved.plan ? [{ role: 'assistant', kind: 'lesson', plan: saved.plan, lessons: saved.lessons, followups: saved.followups ?? [] }] : []),
       ])
       setPendingQuestions(saved.review ? saved.review.questions : null)
     } catch {
@@ -150,7 +191,17 @@ function App() {
     setPendingQuestions(null)
   }
 
-  const cantSend = loading || !draft.trim()
+  const onPlanPage = askMode && page === 0
+  const cantSend = loading || !draft.trim() || onPlanPage || quizShowing || asking !== null
+  const placeholder = loading
+    ? 'Type a message'
+    : quizShowing
+      ? 'Quiz time. Use + New lesson to learn something else'
+      : onPlanPage
+        ? 'Click Next to start, then ask about any step'
+        : askMode
+          ? `Ask about step ${page}…`
+          : 'What would you like to learn?'
 
   return (
     <div className="app">
@@ -204,6 +255,11 @@ function App() {
                     key={`${sessionId}-${i}`} // a different session gets a fresh pager instead of keeping the old page
                     plan={m.plan}
                     lessons={m.lessons}
+                    followups={m.followups}
+                    page={page}
+                    setPage={setPage}
+                    asking={asking}
+                    askFailed={askFailed}
                     // only the newest lesson can move on to the questions that just came back
                     questionsReady={i === messages.length - 1 && pendingQuestions !== null}
                     onContinue={showQuestions}
@@ -225,7 +281,8 @@ function App() {
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={onKeyDown}
-                placeholder="Type a message"
+                placeholder={placeholder}
+                disabled={onPlanPage || quizShowing}
               />
               <button className="send" onClick={send} disabled={cantSend}>
                 Send
@@ -267,8 +324,7 @@ function Progress({ count, current }) {
 
 // the plan, then each lesson step, one page at a time with Back / Next;
 // the last step's button moves on to the questions
-function Lesson({ plan, lessons, questionsReady, onContinue }) {
-  const [page, setPage] = useState(0) // 0 is the plan, 1..n are the steps
+function Lesson({ plan, lessons, followups, page, setPage, asking, askFailed, questionsReady, onContinue }) {
   const pages = plan.steps.length + 1
   const isLast = page === pages - 1
   const lesson = page > 0 && lessons ? lessons[page - 1] : null
@@ -295,6 +351,11 @@ function Lesson({ plan, lessons, questionsReady, onContinue }) {
           {lesson.explanation}
           {/* only steps where the teacher asked for a picture have one */}
           {lesson.image_url && <img className="lesson-image" src={API_URL + lesson.image_url} alt={lesson.image_prompt} />}
+          <StepQuestions
+            followups={followups.filter((f) => f.index === page - 1)}
+            asking={asking?.index === page - 1 ? asking.question : null}
+            failed={askFailed === page - 1}
+          />
         </div>
       )}
 
@@ -313,6 +374,29 @@ function Lesson({ plan, lessons, questionsReady, onContinue }) {
           </button>
         )}
       </div>
+    </div>
+  )
+}
+
+// the student's questions about one step (asked in the composer) with the tutor's answers
+function StepQuestions({ followups, asking, failed }) {
+  if (!followups.length && !asking && !failed) return null
+
+  return (
+    <div className="step-questions">
+      {followups.map((f, i) => (
+        <div key={i} className="followup">
+          <div className="followup-q">{f.question}</div>
+          <div className="followup-a">{f.answer}</div>
+        </div>
+      ))}
+      {asking && (
+        <div className="followup">
+          <div className="followup-q">{asking}</div>
+          <div className="followup-a thinking">Thinking…</div>
+        </div>
+      )}
+      {failed && <div className="msg-error ask-error">Couldn't get an answer. Please try again.</div>}
     </div>
   )
 }

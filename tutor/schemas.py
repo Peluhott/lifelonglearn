@@ -135,3 +135,19 @@ class ReviewerResult(BaseModel):
         description="One multiple choice question for each step that was taught, in the same order as the steps."
     )
     
+# ---------------------------------------------------------------------------
+# Student -> Follow-up (after the lesson, outside the graph)
+# ---------------------------------------------------------------------------
+
+class FollowUpResult(BaseModel):
+    """The answer to a student's follow-up question about one taught step"""
+
+    answer: str = Field(description="A short, easy to follow answer to the student's question about this step.")
+
+
+class FollowUp(BaseModel):
+    """A follow-up question and its answer, saved with the session"""
+
+    index: int = Field(description="Position of the step it was asked about (0-based).")
+    question: str
+    answer: str

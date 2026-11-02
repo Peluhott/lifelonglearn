@@ -11,6 +11,7 @@ from psycopg_pool import ConnectionPool
 from pydantic import BaseModel
 
 from tutor import schemas
+from tutor.schemas import FollowUp
 
 
 def serializer() -> JsonPlusSerializer:
@@ -43,7 +44,10 @@ def postgres_checkpointer(pool: ConnectionPool) -> PostgresSaver:
 
 
 class PostgresSessions:
-    """One row per tutoring session; the session id is also the graph's thread_id."""
+    """One row per tutoring session (the id is also the graph's thread_id), plus the follow-up questions asked in it.
+
+    Follow-ups live here instead of the graph state: writing them into a checkpoint would cancel a quiz the graph is paused on.
+    """
 
     def __init__(self, pool: ConnectionPool):
         self.pool = pool
@@ -56,6 +60,18 @@ class PostgresSessions:
                     id uuid PRIMARY KEY,
                     title text NOT NULL,
                     prompt text NOT NULL,
+                    created_at timestamptz NOT NULL DEFAULT now()
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS followups (
+                    id bigserial PRIMARY KEY,
+                    session_id uuid NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    step_index integer NOT NULL,
+                    question text NOT NULL,
+                    answer text NOT NULL,
                     created_at timestamptz NOT NULL DEFAULT now()
                 )
                 """
@@ -76,6 +92,21 @@ class PostgresSessions:
         """Returns whether a row was there to delete."""
         with self.pool.connection() as conn:
             return conn.execute("DELETE FROM sessions WHERE id = %s", (session_id,)).rowcount > 0
+
+    def add_followup(self, session_id: uuid.UUID, followup: FollowUp) -> None:
+        with self.pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO followups (session_id, step_index, question, answer) VALUES (%s, %s, %s, %s)",
+                (session_id, followup.index, followup.question, followup.answer),
+            )
+
+    def followups(self, session_id: uuid.UUID) -> list[FollowUp]:
+        """Every follow-up asked in this session, in the order asked."""
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT step_index, question, answer FROM followups WHERE session_id = %s ORDER BY id", (session_id,)
+            ).fetchall()
+        return [FollowUp(index=r["step_index"], question=r["question"], answer=r["answer"]) for r in rows]
 
     def list(self) -> list[dict]:
         with self.pool.connection() as conn:

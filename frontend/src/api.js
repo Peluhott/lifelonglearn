@@ -48,7 +48,17 @@ const getJson = async (path) => (await request(path)).json()
 // past sessions for the sidebar, newest first: [{ id, title, created_at }]
 export const listSessions = () => getJson('/sessions')
 
-// one saved session: { id, prompt, plan, lessons, review }
+// one saved session: { id, prompt, plan, lessons, review, followups }
 export const getSession = (id) => getJson(`/sessions/${id}`)
 
 export const deleteSession = (id) => request(`/sessions/${id}`, { method: 'DELETE' })
+
+// a follow-up question about one lesson step (0-based index): { index, question, answer }
+export const askAboutStep = async (sessionId, index, question) =>
+  (
+    await request(`/sessions/${sessionId}/steps/${index}/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    })
+  ).json()

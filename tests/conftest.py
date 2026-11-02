@@ -9,6 +9,7 @@ os.environ["LANGSMITH_TRACING"] = "false"
 import pytest
 
 from tutor.schemas import (
+    FollowUpResult,
     IntakeResult,
     PlannerResult,
     ReviewerResult,
@@ -66,6 +67,9 @@ class FakeLLM:
                     for step in taught
                 ]
             )
+        if schema is FollowUpResult:
+            step = re.search(r"^Step: (.*)$", content, re.MULTILINE).group(1)
+            return FollowUpResult(answer=f"more about {step}")
         raise AssertionError(f"FakeLLM has no canned answer for {schema.__name__}")
 
 

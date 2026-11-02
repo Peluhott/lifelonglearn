@@ -9,8 +9,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from api import db
+from tutor.agents.followup import answer_followup
 from tutor.graph import build_graph
-from tutor.schemas import TaughtStep
+from tutor.schemas import FollowUp, TaughtStep
 from tutor.tools.images import IMAGES_DIR
 
 
@@ -43,6 +44,12 @@ class TutorRequest(BaseModel):
     """What the frontend sends to start a tutoring session."""
 
     prompt: str = Field(min_length=1, description="What the student is stuck on.")
+
+
+class AskRequest(BaseModel):
+    """A follow-up question about one lesson step."""
+
+    question: str = Field(min_length=1)
 
 
 def sse(event: str, data: dict) -> str:
@@ -136,6 +143,7 @@ def get_session(session_id: uuid.UUID, request: Request) -> dict:
         "plan": plan.model_dump() if plan else None,
         "lessons": [lesson_payload(t, len(plan.steps)) for t in taught],
         "review": review.model_dump() if review else None,
+        "followups": [f.model_dump() for f in request.app.state.sessions.followups(session_id)],
     }
 
 
@@ -152,3 +160,24 @@ def delete_session(session_id: uuid.UUID, request: Request) -> Response:
             (IMAGES_DIR / step.image).unlink(missing_ok=True)
     graph.checkpointer.delete_thread(str(session_id))
     return Response(status_code=204)
+
+
+@app.post("/sessions/{session_id}/steps/{index}/ask")
+def ask_about_step(session_id: uuid.UUID, index: int, req: AskRequest, request: Request) -> dict:
+    """Answer a follow-up question about one taught step and save it with the session."""
+    graph = request.app.state.graph
+    config = thread(session_id)
+    values = graph.get_state(config).values
+    if not values:
+        raise HTTPException(status_code=404, detail="Session not found")
+    step = next((t for t in values.get("teacher", []) if t.index == index), None)
+    if step is None:
+        raise HTTPException(status_code=404, detail="Step not found")
+
+    sessions = request.app.state.sessions
+    earlier = [f for f in sessions.followups(session_id) if f.index == index]
+    result = answer_followup(values["planner"], step, earlier, req.question)
+    followup = FollowUp(index=index, question=req.question, answer=result.answer)
+    sessions.add_followup(session_id, followup)
+    return followup.model_dump()
+

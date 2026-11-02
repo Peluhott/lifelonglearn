@@ -29,6 +29,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Prompts are `tutor/prompts/<name>.md`, loaded via `prompts.load(name)` into a module-level `<NAME>_INSTRUCTIONS`.
 - `TeacherResult` is the schema the model fills; `TaughtStep` subclasses it to add `image`, which the model never sees.
 - `reviewer_node` returns `{}` when nothing was taught.
+- Follow-up questions about a step are answered outside the graph by `tutor/agents/followup.py::answer_followup` (prompt `followup.md`) and stored in the `followups` table, not graph state.
 
 ## Images
 
@@ -36,7 +37,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Persistence (`api/db.py`)
 
-- Each session's id is also the graph's `thread_id`; `PostgresSaver` checkpoints the full graph state, so `GET /sessions/{id}` rebuilds a session with `graph.get_state(...)`. The `sessions` table only holds the sidebar list (id, title, prompt, created_at).
+- Each session's id is also the graph's `thread_id`; `PostgresSaver` checkpoints the full graph state, so `GET /sessions/{id}` rebuilds a session with `graph.get_state(...)`. Besides checkpoints there are two tables: `sessions` (the sidebar list: id, title, prompt, created_at) and `followups` (`ON DELETE CASCADE` from `sessions`).
 - `tutor/graph.py::graph` has no checkpointer (CLI, graph tests); the API compiles its own with `build_graph(checkpointer)` in the lifespan.
 - Checkpoints store Pydantic objects; `db.serializer()` allow-lists every model in `tutor/schemas.py` automatically. Models defined elsewhere must be added there or LangGraph will refuse to load them.
 - No migration tool: tables are created with `CREATE TABLE IF NOT EXISTS` at startup.
@@ -48,7 +49,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Errors are sent as an `error` event because the 200 response has already started.
 - The generator is sync on purpose so FastAPI runs the blocking Gemini calls in a worker thread.
 - Changing event names or payloads requires matching changes in `frontend/src/api.js`.
-- Other routes: `GET /sessions`, `GET /sessions/{id}`, `DELETE /sessions/{id}` (sidebar row, checkpoint thread, and the session's image files).
+- Other routes: `GET /sessions`, `GET /sessions/{id}` (includes `followups`), `DELETE /sessions/{id}` (sidebar row + follow-ups, checkpoint thread, and the session's image files), `POST /sessions/{id}/steps/{index}/ask` (`{question}` → `{index, question, answer}`; calls Gemini).
 
 ## Conventions
 
