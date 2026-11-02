@@ -96,8 +96,9 @@ class TeacherResult(BaseModel):
 
     image_prompt: Optional[str] = Field(
         None,
-        description="Only when a picture would really help with this step (a diagram, a process, "
-        "what something looks like): a short description of the image to draw. Leave empty otherwise.",
+        description="Usually empty. Fill in only when this step is about something visual that words "
+        "explain badly (a spatial layout, a multi-stage process, a physical object): a short description "
+        "of the image to draw. Never for definitions or abstract ideas. When in doubt, leave it empty.",
     )
 
 
