@@ -23,7 +23,7 @@ class FakeSessions:
         self.rows[session_id]["title"] = title
 
     def delete(self, session_id):
-        self.rows.pop(session_id, None)
+        return self.rows.pop(session_id, None) is not None
 
     def list(self):
         return sorted(self.rows.values(), key=lambda r: r["created_at"], reverse=True)
@@ -102,3 +102,16 @@ def test_saved_session_can_be_reopened(client):
 
 def test_unknown_session_is_404(client):
     assert client.get(f"/sessions/{uuid.uuid4()}").status_code == 404
+
+
+def test_deleting_a_session_removes_it_and_its_images(client, monkeypatch, tmp_path):
+    monkeypatch.setattr("api.main.IMAGES_DIR", tmp_path)
+    (tmp_path / "fake.png").write_bytes(b"png")
+    session_id = dict(stream(client))["session"]["id"]
+
+    assert client.delete(f"/sessions/{session_id}").status_code == 204
+
+    assert client.get("/sessions").json() == []
+    assert client.get(f"/sessions/{session_id}").status_code == 404
+    assert not (tmp_path / "fake.png").exists()
+    assert client.delete(f"/sessions/{session_id}").status_code == 404

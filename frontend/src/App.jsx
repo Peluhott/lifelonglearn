@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { API_URL, getSession, listSessions, streamTutor } from './api.js'
+import { API_URL, deleteSession, getSession, listSessions, streamTutor } from './api.js'
 import './App.css'
 
 const ERROR_TEXT = 'Something went wrong. Please try again.'
@@ -14,6 +14,7 @@ function App() {
   const [pendingQuestions, setPendingQuestions] = useState(null) // review questions held back until the student clicks to continue
   const [sessions, setSessions] = useState([]) // past sessions for the sidebar
   const [sessionId, setSessionId] = useState(null) // the session on screen, null for a new lesson
+  const [confirmingDelete, setConfirmingDelete] = useState(null) // id of the sidebar row asking "Delete?"
   const scrollRef = useRef(null)
   const textareaRef = useRef(null)
   const loading = status !== null
@@ -26,6 +27,16 @@ function App() {
   useEffect(() => {
     refreshSessions()
   }, [])
+
+  // a click anywhere except the red Delete button cancels it
+  useEffect(() => {
+    if (!confirmingDelete) return
+    const cancel = (e) => {
+      if (!e.target.closest('.session-delete.confirm')) setConfirmingDelete(null)
+    }
+    document.addEventListener('mousedown', cancel)
+    return () => document.removeEventListener('mousedown', cancel)
+  }, [confirmingDelete])
 
   // keep the newest message in view
   useEffect(() => {
@@ -94,6 +105,17 @@ function App() {
     setPendingQuestions(null)
   }
 
+  const removeSession = async (id) => {
+    setConfirmingDelete(null)
+    try {
+      await deleteSession(id)
+    } catch {
+      return refreshSessions() // it may already be gone; show what the server has
+    }
+    setSessions((prev) => prev.filter((s) => s.id !== id))
+    if (id === sessionId) newLesson()
+  }
+
   // rebuild a saved session the way it looked when its lessons finished (the quiz starts fresh)
   const openSession = async (id) => {
     if (loading || id === sessionId) return
@@ -143,17 +165,26 @@ function App() {
             + New lesson
           </button>
           <nav className="session-list">
-            {sessions.map((s) => (
-              <button
-                key={s.id}
-                className={`session${s.id === sessionId ? ' on' : ''}`}
-                onClick={() => openSession(s.id)}
-                disabled={loading}
-              >
-                <span className="session-title">{s.title}</span>
-                <span className="session-date">{shortDate(s.created_at)}</span>
-              </button>
-            ))}
+            {sessions.map((s) => {
+              const confirming = confirmingDelete === s.id
+              return (
+                <div key={s.id} className={`session${s.id === sessionId ? ' on' : ''}${confirming ? ' confirming' : ''}`}>
+                  <button className="session-open" onClick={() => openSession(s.id)} disabled={loading}>
+                    <span className="session-title">{s.title}</span>
+                    <span className="session-date">{shortDate(s.created_at)}</span>
+                  </button>
+                  <button
+                    className={`session-delete${confirming ? ' confirm' : ''}`}
+                    onClick={() => (confirming ? removeSession(s.id) : setConfirmingDelete(s.id))}
+                    disabled={loading}
+                    aria-label={confirming ? `Confirm deleting ${s.title}` : `Delete ${s.title}`}
+                    title={confirming ? undefined : 'Delete lesson'}
+                  >
+                    {confirming ? 'Delete' : '×'}
+                  </button>
+                </div>
+              )
+            })}
           </nav>
         </aside>
 

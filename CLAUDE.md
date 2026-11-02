@@ -48,6 +48,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Errors are sent as an `error` event because the 200 response has already started.
 - The generator is sync on purpose so FastAPI runs the blocking Gemini calls in a worker thread.
 - Changing event names or payloads requires matching changes in `frontend/src/api.js`.
+- Other routes: `GET /sessions`, `GET /sessions/{id}`, `DELETE /sessions/{id}` (sidebar row, checkpoint thread, and the session's image files).
 
 ## Conventions
 

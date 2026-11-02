@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -137,3 +137,18 @@ def get_session(session_id: uuid.UUID, request: Request) -> dict:
         "lessons": [lesson_payload(t, len(plan.steps)) for t in taught],
         "review": review.model_dump() if review else None,
     }
+
+
+@app.delete("/sessions/{session_id}", status_code=204)
+def delete_session(session_id: uuid.UUID, request: Request) -> Response:
+    """Remove a session from the sidebar along with its checkpoint and generated images."""
+    graph = request.app.state.graph
+    values = graph.get_state(thread(session_id)).values
+    row_deleted = request.app.state.sessions.delete(session_id)
+    if not values and not row_deleted:
+        raise HTTPException(status_code=404, detail="Session not found")
+    for step in values.get("teacher", []):
+        if step.image:
+            (IMAGES_DIR / step.image).unlink(missing_ok=True)
+    graph.checkpointer.delete_thread(str(session_id))
+    return Response(status_code=204)

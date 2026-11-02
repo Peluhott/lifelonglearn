@@ -72,9 +72,10 @@ class PostgresSessions:
         with self.pool.connection() as conn:
             conn.execute("UPDATE sessions SET title = %s WHERE id = %s", (title, session_id))
 
-    def delete(self, session_id: uuid.UUID) -> None:
+    def delete(self, session_id: uuid.UUID) -> bool:
+        """Returns whether a row was there to delete."""
         with self.pool.connection() as conn:
-            conn.execute("DELETE FROM sessions WHERE id = %s", (session_id,))
+            return conn.execute("DELETE FROM sessions WHERE id = %s", (session_id,)).rowcount > 0
 
     def list(self) -> list[dict]:
         with self.pool.connection() as conn:

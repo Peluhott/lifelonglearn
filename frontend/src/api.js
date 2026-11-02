@@ -37,14 +37,18 @@ export async function streamTutor(prompt, onEvent) {
   }
 }
 
-async function getJson(path) {
-  const response = await fetch(`${API_URL}${path}`)
+async function request(path, options) {
+  const response = await fetch(`${API_URL}${path}`, options)
   if (!response.ok) throw new Error(`Request failed: ${response.status}`)
-  return response.json()
+  return response
 }
+
+const getJson = async (path) => (await request(path)).json()
 
 // past sessions for the sidebar, newest first: [{ id, title, created_at }]
 export const listSessions = () => getJson('/sessions')
 
 // one saved session: { id, prompt, plan, lessons, review }
 export const getSession = (id) => getJson(`/sessions/${id}`)
+
+export const deleteSession = (id) => request(`/sessions/${id}`, { method: 'DELETE' })
