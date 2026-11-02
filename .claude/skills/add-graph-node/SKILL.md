@@ -11,7 +11,7 @@ Read `tutor/agents/reviewer.py` (single call) and `tutor/agents/teacher.py` (loo
 4. **Node** — create `tutor/agents/<name>.py`:
    - `<NAME>_INSTRUCTIONS = prompts.load("<name>")` at module level
    - `def <name>_node(state: TutorState) -> dict:` calling `llm.structured(system=..., content=..., schema=...)` and returning `{"<name>": result}`
-5. **Wire** — in `tutor/graph.py`, `add_node` and its edges. If it adds steps to a loop, check that `recursion_limit=50` (set in `main.py` and `api/main.py`) still covers the longest plan.
+5. **Wire** — in `tutor/graph.py`, `add_node` and its edges. For per-item parallel work, follow `teach_every_step`: return a list of `Send("<node>", {...})` from a conditional edge, give the node its own input `TypedDict` (like `TeacherTask`), and carry an index so results can be re-sorted.
 6. **API** — add a branch in `events()` in `api/main.py` that yields an SSE event for the node's output. Handle empty `{}` outputs (a node that returns nothing yields no key).
 7. **Frontend** — handle the new event in `frontend/src/api.js` and render it in the UI.
 8. **CLI** — print the new key in `main.py` if it should appear there.

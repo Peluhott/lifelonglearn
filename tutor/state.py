@@ -10,6 +10,11 @@ class TutorState(TypedDict, total=False):
     user_prompt: str          # what the student typed
     intake: IntakeResult      # filled in by the intake agent
     planner: PlannerResult    # filled in by the planner agent
-    teacher: Annotated[list[TaughtStep], operator.add]  # one result per step (plus its image), appended by the teacher agent
-    planner_index: int        # which step in planner.steps to teach next, set to 0 by planner and moved forward by teacher
+    teacher: Annotated[list[TaughtStep], operator.add]  # one result per step, appended by the parallel teachers in any order (use .index)
     reviewer: ReviewerResult  # the questions the reviewer agent wrote, one per taught step
+
+
+class TeacherTask(TypedDict):
+    """What each parallel teacher gets instead of the shared state (sent by graph.teach_every_step)."""
+    planner: PlannerResult
+    step_index: int

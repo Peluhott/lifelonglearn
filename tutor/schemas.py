@@ -107,6 +107,7 @@ class TaughtStep(TeacherResult):
     Kept separate so the model never sees or fills these fields."""
 
     image: Optional[str] = Field(None, description="File name of the generated image, if one was made.")
+    index: int = Field(description="Position of this step in the plan (0-based); teachers run in parallel and finish in any order.")
 
 # ---------------------------------------------------------------------------
 # Teacher -> Reviewer

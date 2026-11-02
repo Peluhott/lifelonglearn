@@ -21,10 +21,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Graph architecture
 
-- Flow: intake → planner → teacher (loops once per plan step) → reviewer, wired in `tutor/graph.py`.
+- Flow: intake → planner → teacher × N **in parallel** → reviewer, wired in `tutor/graph.py`. `teach_every_step` fans out one `Send("teacher", {"planner", "step_index"})` per plan step (or goes straight to `"reviewer"` if there are none); the reviewer runs once after all teachers finish.
+- `teacher_node` receives a `TeacherTask` (`tutor/state.py`), not the shared state.
 - State keys in `tutor/state.py` are named after the node that fills them.
-- `teacher` is `Annotated[list[TaughtStep], operator.add]`, so `teacher_node` must return a **one-item list**. It also advances `planner_index`, which `has_steps_left` reads.
-- `recursion_limit=50` is set in both `main.py` and `api/main.py`; every teacher step counts toward it.
+- `teacher` is `Annotated[list[TaughtStep], operator.add]`, so `teacher_node` must return a **one-item list**. Parallel teachers finish in any order: always sort by `TaughtStep.index` before showing or using them.
 - All LLM calls go through `tutor/llm.py::structured(system, content, schema)` — don't call the Gemini client directly for text.
 - Prompts are `tutor/prompts/<name>.md`, loaded via `prompts.load(name)` into a module-level `<NAME>_INSTRUCTIONS`.
 - `TeacherResult` is the schema the model fills; `TaughtStep` subclasses it to add `image`, which the model never sees.

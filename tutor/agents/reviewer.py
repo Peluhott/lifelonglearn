@@ -5,7 +5,7 @@ from tutor.state import TutorState
 REVIEWER_INSTRUCTIONS = prompts.load("reviewer")
 
 def reviewer_node(state: TutorState) -> dict:
-    taught = state.get("teacher", [])
+    taught = sorted(state.get("teacher", []), key=lambda t: t.index)  # parallel teachers finish in any order
     if not taught:
         return {}                            # nothing was taught, so there's nothing to review
     plan = state["planner"]

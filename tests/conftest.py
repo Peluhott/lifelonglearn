@@ -25,6 +25,7 @@ class FakeLLM:
         self.steps = ["step one", "step two"]
         self.image_steps = {"step one"}  # steps whose lesson asks for a picture
         self.error = None                # set to an exception to simulate Gemini failing
+        self.teacher_barrier = None      # set to a threading.Barrier to prove teachers run at the same time
 
     def __call__(self, system, content, schema):
         self.calls.append(schema)
@@ -44,6 +45,8 @@ class FakeLLM:
                 method="worked examples",
             )
         if schema is TeacherResult:
+            if self.teacher_barrier:
+                self.teacher_barrier.wait()  # times out (BrokenBarrierError) unless every teacher arrives together
             step = content.split("Step to teach: ")[-1]
             return TeacherResult(
                 step=step,

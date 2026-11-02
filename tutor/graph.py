@@ -1,4 +1,5 @@
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Send
 
 from tutor.agents.intake import intake_node
 from tutor.agents.planner import planner_node
@@ -7,11 +8,13 @@ from tutor.agents.reviewer import reviewer_node
 from tutor.state import TutorState
 
 
-def has_steps_left(state: TutorState) -> str:
-    """Send the graph back to the teacher until every planner step has been taught."""
-    if state["planner_index"] < len(state["planner"].steps):
-        return "teacher"
-    return "reviewer"  # if there are no steps left, go to the reviewer to check for understanding
+def teach_every_step(state: TutorState):
+    """Start one teacher per plan step, all at once; with no steps, go straight to the reviewer."""
+    plan = state["planner"]
+    if not plan.steps:
+        return "reviewer"
+    # each Send runs the teacher with its own small input instead of the shared state
+    return [Send("teacher", {"planner": plan, "step_index": i}) for i in range(len(plan.steps))]
 
 # register state in graph
 builder = StateGraph(TutorState)        # a graph whose shared state is TutorState
@@ -25,11 +28,11 @@ builder.add_node("reviewer", reviewer_node) # register reviewer
 
 
 
-#start mapping out the graph 
+#start mapping out the graph
 builder.add_edge(START, "intake")       # first thing that runs
 builder.add_edge("intake", "planner")
-builder.add_conditional_edges("planner", has_steps_left)  # skip the teacher if the plan has no steps
-builder.add_conditional_edges("teacher", has_steps_left)  # loop back to the teacher, or go to the reviewer when done
-builder.add_edge("reviewer", END)       # reviewer runs once at the end, then we're done
+builder.add_conditional_edges("planner", teach_every_step, ["teacher", "reviewer"])
+builder.add_edge("teacher", "reviewer")  # waits for every parallel teacher to finish, then runs once
+builder.add_edge("reviewer", END)
 
 graph = builder.compile()               # turn the blueprint into something runnable
