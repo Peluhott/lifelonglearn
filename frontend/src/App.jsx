@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { API_URL, streamTutor } from './api.js'
+import { API_URL, getSession, listSessions, streamTutor } from './api.js'
 import './App.css'
 
 const ERROR_TEXT = 'Something went wrong. Please try again.'
+
+const shortDate = (iso) => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 
 function App() {
   // every message is { role: 'user' | 'assistant', kind, ... } where kind decides how it's drawn
@@ -10,9 +12,20 @@ function App() {
   const [draft, setDraft] = useState('')
   const [status, setStatus] = useState(null) // what the tutor is doing right now ("Planning…"), null when idle
   const [pendingQuestions, setPendingQuestions] = useState(null) // review questions held back until the student clicks to continue
+  const [sessions, setSessions] = useState([]) // past sessions for the sidebar
+  const [sessionId, setSessionId] = useState(null) // the session on screen, null for a new lesson
   const scrollRef = useRef(null)
   const textareaRef = useRef(null)
   const loading = status !== null
+
+  const refreshSessions = () =>
+    listSessions()
+      .then(setSessions)
+      .catch(() => {}) // the sidebar is optional; the tutor still works without it
+
+  useEffect(() => {
+    refreshSessions()
+  }, [])
 
   // keep the newest message in view
   useEffect(() => {
@@ -39,7 +52,9 @@ function App() {
 
   // turn each event from the tutor graph into what the student sees
   const onEvent = (event, data) => {
-    if (event === 'plan') {
+    if (event === 'session') {
+      setSessionId(data.id)
+    } else if (event === 'plan') {
       addMessage({ role: 'assistant', kind: 'lesson', plan: data, lessons: null }) // lessons arrive later
       setStatus('Writing up the lessons…')
     } else if (event === 'lessons') {
@@ -56,16 +71,43 @@ function App() {
   const send = async () => {
     const text = draft.trim()
     if (!text || loading) return
-    addMessage({ role: 'user', kind: 'text', content: text })
+    // every message is its own saved session, so start from a clean screen
+    setMessages([{ role: 'user', kind: 'text', content: text }])
+    setSessionId(null)
     setDraft('')
     setStatus('Planning…')
-    setPendingQuestions(null) // a new lesson replaces any questions that were never opened
+    setPendingQuestions(null)
     try {
-      await streamTutor(text, onEvent) // each message starts a fresh lesson for now (the graph has no memory yet)
+      await streamTutor(text, onEvent)
     } catch {
       addMessage({ role: 'assistant', kind: 'text', content: ERROR_TEXT, error: true })
     } finally {
       setStatus(null)
+      refreshSessions()
+    }
+  }
+
+  const newLesson = () => {
+    if (loading) return
+    setMessages([])
+    setSessionId(null)
+    setPendingQuestions(null)
+  }
+
+  // rebuild a saved session the way it looked when its lessons finished (the quiz starts fresh)
+  const openSession = async (id) => {
+    if (loading || id === sessionId) return
+    setSessionId(id)
+    setPendingQuestions(null)
+    try {
+      const saved = await getSession(id)
+      setMessages([
+        { role: 'user', kind: 'text', content: saved.prompt },
+        ...(saved.plan ? [{ role: 'assistant', kind: 'lesson', plan: saved.plan, lessons: saved.lessons }] : []),
+      ])
+      setPendingQuestions(saved.review ? saved.review.questions : null)
+    } catch {
+      setMessages([{ role: 'assistant', kind: 'text', content: "Couldn't open that lesson.", error: true }])
     }
   }
 
@@ -95,47 +137,70 @@ function App() {
         <span className="wordmark">Lifelong</span>
       </header>
 
-      <main className="messages" ref={scrollRef}>
-        <div className="thread">
-          {messages.length === 0 && (
-            <div className="empty">
-              <h1>What would you like to learn?</h1>
-              <p>Ask a question or describe a topic, and your tutor will take it from there.</p>
-            </div>
-          )}
-
-          {messages.map((m, i) =>
-            m.kind === 'lesson' ? (
-              <Lesson
-                key={i}
-                plan={m.plan}
-                lessons={m.lessons}
-                // only the newest lesson can move on to the questions that just came back
-                questionsReady={i === messages.length - 1 && pendingQuestions !== null}
-                onContinue={showQuestions}
-              />
-            ) : (
-              <Message key={i} message={m} />
-            ),
-          )}
-
-          {status && <div className="thinking">{status}</div>}
-        </div>
-      </main>
-
-      <div className="composer-wrap">
-        <div className="composer">
-          <textarea
-            ref={textareaRef}
-            rows={1}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder="Type a message"
-          />
-          <button className="send" onClick={send} disabled={cantSend}>
-            Send
+      <div className="body">
+        <aside className="sidebar">
+          <button className="new-lesson" onClick={newLesson} disabled={loading}>
+            + New lesson
           </button>
+          <nav className="session-list">
+            {sessions.map((s) => (
+              <button
+                key={s.id}
+                className={`session${s.id === sessionId ? ' on' : ''}`}
+                onClick={() => openSession(s.id)}
+                disabled={loading}
+              >
+                <span className="session-title">{s.title}</span>
+                <span className="session-date">{shortDate(s.created_at)}</span>
+              </button>
+            ))}
+          </nav>
+        </aside>
+
+        <div className="chat">
+          <main className="messages" ref={scrollRef}>
+            <div className="thread">
+              {messages.length === 0 && (
+                <div className="empty">
+                  <h1>What would you like to learn?</h1>
+                  <p>Ask a question or describe a topic, and your tutor will take it from there.</p>
+                </div>
+              )}
+
+              {messages.map((m, i) =>
+                m.kind === 'lesson' ? (
+                  <Lesson
+                    key={`${sessionId}-${i}`} // a different session gets a fresh pager instead of keeping the old page
+                    plan={m.plan}
+                    lessons={m.lessons}
+                    // only the newest lesson can move on to the questions that just came back
+                    questionsReady={i === messages.length - 1 && pendingQuestions !== null}
+                    onContinue={showQuestions}
+                  />
+                ) : (
+                  <Message key={`${sessionId}-${i}`} message={m} />
+                ),
+              )}
+
+              {status && <div className="thinking">{status}</div>}
+            </div>
+          </main>
+
+          <div className="composer-wrap">
+            <div className="composer">
+              <textarea
+                ref={textareaRef}
+                rows={1}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={onKeyDown}
+                placeholder="Type a message"
+              />
+              <button className="send" onClick={send} disabled={cantSend}>
+                Send
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

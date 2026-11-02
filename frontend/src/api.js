@@ -2,7 +2,7 @@
 export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 // Send the student's prompt to the tutor graph and call onEvent(event, data) for every
-// Server-Sent Event it streams back (intake, plan, step, review, done, error).
+// Server-Sent Event it streams back (session, intake, plan, lessons, review, done, error).
 // We use fetch instead of EventSource because EventSource can only make GET requests.
 export async function streamTutor(prompt, onEvent) {
   const response = await fetch(`${API_URL}/tutor/stream`, {
@@ -36,3 +36,15 @@ export async function streamTutor(prompt, onEvent) {
     }
   }
 }
+
+async function getJson(path) {
+  const response = await fetch(`${API_URL}${path}`)
+  if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+  return response.json()
+}
+
+// past sessions for the sidebar, newest first: [{ id, title, created_at }]
+export const listSessions = () => getJson('/sessions')
+
+// one saved session: { id, prompt, plan, lessons, review }
+export const getSession = (id) => getJson(`/sessions/${id}`)
