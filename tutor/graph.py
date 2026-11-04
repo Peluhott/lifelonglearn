@@ -1,20 +1,14 @@
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Send
 
 from tutor.agents.intake import intake_node
 from tutor.agents.planner import planner_node
-from tutor.agents.teacher import teacher_node
-from tutor.agents.reviewer import reviewer_node
+from tutor.agents.select_method import select_method_node
+from tutor.methods import METHODS
 from tutor.state import TutorState
 
 
-def teach_every_step(state: TutorState):
-    """Start one teacher per plan step, all at once; with no steps, go straight to the reviewer."""
-    plan = state["planner"]
-    if not plan.steps:
-        return "reviewer"
-    # each Send runs the teacher with its own small input instead of the shared state
-    return [Send("teacher", {"planner": plan, "step_index": i}) for i in range(len(plan.steps))]
+def route_to_method(state: TutorState) -> str:
+    return state["select_method"].chosen_method
 
 # register state in graph
 builder = StateGraph(TutorState)        # a graph whose shared state is TutorState
@@ -23,17 +17,18 @@ builder = StateGraph(TutorState)        # a graph whose shared state is TutorSta
 #register the agents as nodes in the graph
 builder.add_node("intake", intake_node) # register intake
 builder.add_node("planner", planner_node) # register planner
-builder.add_node("teacher", teacher_node) # register teacher
-builder.add_node("reviewer", reviewer_node) # register reviewer
+builder.add_node("select_method", select_method_node) # register select_method
+for name, build_method in METHODS.items():
+    builder.add_node(name, build_method())  # each teaching method is a compiled subgraph
+    builder.add_edge(name, END)
 
 
 
 #start mapping out the graph
 builder.add_edge(START, "intake")       # first thing that runs
 builder.add_edge("intake", "planner")
-builder.add_conditional_edges("planner", teach_every_step, ["teacher", "reviewer"])
-builder.add_edge("teacher", "reviewer")  # waits for every parallel teacher to finish, then runs once
-builder.add_edge("reviewer", END)
+builder.add_edge("planner", "select_method")
+builder.add_conditional_edges("select_method", route_to_method, list(METHODS))
 
 
 def build_graph(checkpointer=None):
@@ -41,4 +36,4 @@ def build_graph(checkpointer=None):
     return builder.compile(checkpointer=checkpointer)
 
 
-graph = build_graph()                   # no saving: used by the CLI and tests
+graph = build_graph()                   # no saving: used by the graph tests

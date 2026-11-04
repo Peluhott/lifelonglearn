@@ -134,4 +134,68 @@ class ReviewerResult(BaseModel):
     questions: list[ReviewQuestion] = Field(
         description="One multiple choice question for each step that was taught, in the same order as the steps."
     )
-    
+
+# ---------------------------------------------------------------------------
+# Planner -> Method subgraph
+# ---------------------------------------------------------------------------
+
+class SelectMethodResult(BaseModel):
+    """Which teaching method to use for this request, and why."""
+
+    chosen_method: Literal["structured_lesson", "socratic"] = Field(
+        description="The teaching method that fits this request."
+    )
+    request_type: Literal["overview", "specific_confusion", "told_fact", "unclear"] = Field(
+        description="The underlying type of request, even when the student names a teaching style."
+    )
+    reason: str = Field(description="One line explaining the choice.")
+
+# ---------------------------------------------------------------------------
+# Socratic subgraph
+# ---------------------------------------------------------------------------
+
+class DialogueTurn(BaseModel):
+    """One message in a Socratic dialogue."""
+
+    role: Literal["tutor", "student"]
+    text: str
+
+
+class SocraticTarget(BaseModel):
+    """What the dialogue is leading to. Internal only, never shown to the student."""
+
+    target_insight: str = Field(description="The key insight, in one or two sentences.")
+    premises: list[str] = Field(
+        default_factory=list, description="The facts the student needs in order to reason their way to the insight."
+    )
+    misconceptions: list[str] = Field(
+        default_factory=list, description="Common misconceptions to watch for on the way to the insight."
+    )
+
+
+class SocraticQuestion(BaseModel):
+    """The next thing the tutor says to the student."""
+
+    question: str = Field(description="One question or small hint for the student.")
+
+
+class AnswerEvaluation(BaseModel):
+    """How the student's latest answer relates to the target insight."""
+
+    verdict: Literal["correct", "partial", "misconception", "stuck"] = Field(
+        description="'correct' if the answer is right, 'partial' if it is right but incomplete, "
+        "'misconception' if it rests on a wrong idea, 'stuck' if the student has no idea or didn't try."
+    )
+    reached_target: bool = Field(
+        description="True only when the student has now expressed the target insight in their own words."
+    )
+
+
+class SocraticWrapUp(BaseModel):
+    """How the dialogue ends."""
+
+    explanation: str = Field(description="The insight in plain words.")
+    terms: list[str] = Field(
+        default_factory=list,
+        description="Names and definitions the student couldn't have derived, each as 'name: definition'.",
+    )
