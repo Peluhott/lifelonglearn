@@ -1,14 +1,14 @@
 // where the FastAPI backend runs; override with VITE_API_URL in frontend/.env if it moves
 export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
-// Send the student's prompt to the tutor graph and call onEvent(event, data) for every
-// Server-Sent Event it streams back (session, intake, plan, lessons, review, done, error).
+// POST to the tutor and call onEvent(event, data) for every Server-Sent Event it streams back
+// (session, intake, plan, lessons, review, question, wrap_up, done, error).
 // We use fetch instead of EventSource because EventSource can only make GET requests.
-export async function streamTutor(prompt, onEvent) {
-  const response = await fetch(`${API_URL}/tutor/stream`, {
+async function postStream(path, body, onEvent) {
+  const response = await fetch(`${API_URL}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt }),
+    body: JSON.stringify(body),
   })
   if (!response.ok) throw new Error(`Request failed: ${response.status}`)
 
@@ -37,6 +37,12 @@ export async function streamTutor(prompt, onEvent) {
   }
 }
 
+// start a new session from the student's prompt
+export const streamTutor = (prompt, onEvent) => postStream('/tutor/stream', { prompt }, onEvent)
+
+// continue a paused session with the student's answer
+export const answerTutor = (id, answer, onEvent) => postStream(`/sessions/${id}/answer`, { answer }, onEvent)
+
 async function getJson(path) {
   const response = await fetch(`${API_URL}${path}`)
   if (!response.ok) throw new Error(`Request failed: ${response.status}`)
@@ -46,5 +52,5 @@ async function getJson(path) {
 // past sessions for the sidebar, newest first: [{ id, title, created_at }]
 export const listSessions = () => getJson('/sessions')
 
-// one saved session: { id, prompt, plan, lessons, review }
+// one saved session: { id, prompt, method, plan, lessons, review, socratic, in_progress }
 export const getSession = (id) => getJson(`/sessions/${id}`)

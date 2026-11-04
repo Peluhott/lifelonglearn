@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { API_URL, getSession, listSessions, streamTutor } from './api.js'
+import { answerTutor, API_URL, getSession, listSessions, streamTutor } from './api.js'
 import './App.css'
 
 const ERROR_TEXT = 'Something went wrong. Please try again.'
@@ -14,6 +14,7 @@ function App() {
   const [pendingQuestions, setPendingQuestions] = useState(null) // review questions held back until the student clicks to continue
   const [sessions, setSessions] = useState([]) // past sessions for the sidebar
   const [sessionId, setSessionId] = useState(null) // the session on screen, null for a new lesson
+  const [inDialogue, setInDialogue] = useState(false) // a Socratic dialogue is under way, so a message answers it
   const scrollRef = useRef(null)
   const textareaRef = useRef(null)
   const loading = status !== null
@@ -62,6 +63,12 @@ function App() {
       setStatus('Generating questions…')
     } else if (event === 'review') {
       setPendingQuestions(data.questions) // don't show yet, "Continue to questions" on the last step reveals them
+    } else if (event === 'question') {
+      addMessage({ role: 'assistant', kind: 'text', content: data.question })
+      setInDialogue(true)
+    } else if (event === 'wrap_up') {
+      addMessage({ role: 'assistant', kind: 'text', content: data.text })
+      setInDialogue(false)
     } else if (event === 'error') {
       addMessage({ role: 'assistant', kind: 'text', content: ERROR_TEXT, error: true })
     }
@@ -71,14 +78,19 @@ function App() {
   const send = async () => {
     const text = draft.trim()
     if (!text || loading) return
-    // every message is its own saved session, so start from a clean screen
-    setMessages([{ role: 'user', kind: 'text', content: text }])
-    setSessionId(null)
     setDraft('')
-    setStatus('Planning…')
-    setPendingQuestions(null)
+    if (inDialogue) {
+      addMessage({ role: 'user', kind: 'text', content: text })
+      setStatus('Thinking…')
+    } else {
+      // outside a dialogue every message is its own saved session, so start from a clean screen
+      setMessages([{ role: 'user', kind: 'text', content: text }])
+      setSessionId(null)
+      setStatus('Planning…')
+      setPendingQuestions(null)
+    }
     try {
-      await streamTutor(text, onEvent)
+      await (inDialogue ? answerTutor(sessionId, text, onEvent) : streamTutor(text, onEvent))
     } catch {
       addMessage({ role: 'assistant', kind: 'text', content: ERROR_TEXT, error: true })
     } finally {
@@ -92,6 +104,7 @@ function App() {
     setMessages([])
     setSessionId(null)
     setPendingQuestions(null)
+    setInDialogue(false)
   }
 
   // rebuild a saved session the way it looked when its lessons finished (the quiz starts fresh)
@@ -99,13 +112,24 @@ function App() {
     if (loading || id === sessionId) return
     setSessionId(id)
     setPendingQuestions(null)
+    setInDialogue(false)
     try {
       const saved = await getSession(id)
+      const socratic = saved.method === 'socratic'
       setMessages([
         { role: 'user', kind: 'text', content: saved.prompt },
-        ...(saved.plan ? [{ role: 'assistant', kind: 'lesson', plan: saved.plan, lessons: saved.lessons }] : []),
+        ...(socratic
+          ? saved.socratic.map((turn) => ({
+              role: turn.role === 'student' ? 'user' : 'assistant',
+              kind: 'text',
+              content: turn.text,
+            }))
+          : saved.plan
+            ? [{ role: 'assistant', kind: 'lesson', plan: saved.plan, lessons: saved.lessons }]
+            : []),
       ])
       setPendingQuestions(saved.review ? saved.review.questions : null)
+      setInDialogue(socratic && saved.in_progress) // an unfinished dialogue picks up where it left off
     } catch {
       setMessages([{ role: 'assistant', kind: 'text', content: "Couldn't open that lesson.", error: true }])
     }
@@ -194,7 +218,7 @@ function App() {
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={onKeyDown}
-                placeholder="Type a message"
+                placeholder={inDialogue ? 'Type your answer' : 'Type a message'}
               />
               <button className="send" onClick={send} disabled={cantSend}>
                 Send
