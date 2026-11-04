@@ -3,7 +3,7 @@ name: add-graph-node
 description: Checklist for adding a new agent node to the LangGraph tutor (schema, state key, prompt, node function, graph wiring, API SSE event, frontend). Use when adding or splitting an agent in tutor/agents/.
 ---
 
-Read `tutor/agents/reviewer.py` (single call) and `tutor/agents/teacher.py` (looping node) first and mirror their shape.
+Read `reviewer_node` (single call) and `teacher_node` (parallel node) in `tutor/methods/structured_lesson/nodes.py` first and mirror their shape.
 
 1. **Schema** — add a Pydantic result model to `tutor/schemas.py`. If the code needs to attach fields the model shouldn't fill, subclass it (like `TeacherResult` → `TaughtStep`) and pass only the base class to `structured`.
 2. **State** — add a key named after the node to `TutorState` in `tutor/state.py`. If the node runs in a loop and must accumulate, use `Annotated[list[X], operator.add]` and return a one-item list per run.

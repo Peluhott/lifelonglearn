@@ -8,7 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - API: `uvicorn api.main:app --reload` (port 8000, which `frontend/src/api.js` expects). Needs Postgres at `DATABASE_URL`; startup creates the tables.
 - Frontend: `cd frontend && npm run dev`; lint with `npm run lint` (oxlint). Plain JS, not TypeScript.
 - Install: `.venv/bin/pip install -r requirements.txt`. Nothing is pinned.
-- Tests: `.venv/bin/python -m pytest -q` (offline; run after changes). `tests/conftest.py` autouse-mocks `tutor.llm.structured` and `generate_image` and sets a fake `GEMINI_API_KEY` — tests must never call real Gemini. When adding a schema/node, add its canned answer to `FakeLLM`. API tests swap in `InMemorySaver` + `FakeSessions` (no Postgres); only `tests/test_postgres.py` touches the real database and skips if it's unreachable.
+- **Testing is handled by the user:** don't write, update, or run tests unless asked. This overrides the test steps in `/check` and the `add-graph-node` skill.
+- Tests: `.venv/bin/python -m pytest -q` (offline). `tests/conftest.py` autouse-mocks `tutor.llm.structured` and `generate_image` and sets a fake `GEMINI_API_KEY` — tests must never call real Gemini. New schemas/nodes need a canned answer in `FakeLLM`. API tests swap in `InMemorySaver` + `FakeSessions` (no Postgres); only `tests/test_postgres.py` touches the real database and skips if it's unreachable.
 - No Python linter/formatter. `/check` runs all offline verification.
 
 **Ask before anything that calls Gemini** (running `main.py`, the API, the graph, or any node) — it costs money. Compiling, importing modules, and frontend lint are fine.
@@ -21,7 +22,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Graph architecture
 
-- Flow: intake → planner → teacher × N **in parallel** → reviewer, wired in `tutor/graph.py`. `teach_every_step` fans out one `Send("teacher", {"planner", "step_index"})` per plan step (or goes straight to `"reviewer"` if there are none); the reviewer runs once after all teachers finish.
+- Flow: intake → planner → select_method → one method subgraph → END, wired in `tutor/graph.py`. The parent adds a node and route for each entry in `METHODS` (`tutor/methods/__init__.py`), routing on `state["select_method"].chosen_method`.
+- Parent nodes live in `tutor/agents/`; each method lives in `tutor/methods/<name>/` (`graph.py` with `build_graph()`, `nodes.py`). Subgraphs have no checkpointer of their own.
+- `structured_lesson`: teacher × N **in parallel** → reviewer → finish. `teach_every_step` fans out one `Send("teacher", {"planner", "step_index"})` per plan step (or goes straight to `"reviewer"` if there are none); the reviewer runs once after all teachers finish.
+- `socratic`: set_target → ask_question → wait_for_answer → evaluate_answer → ask_question, give_hint, or wrap_up. Only `wait_for_answer` calls `interrupt()`, because a node reruns from the top on resume and an LLM call there would run twice. Private keys are in `SocraticState`; the dialogue is the shared `socratic` key. `MAX_TURNS` is a placeholder.
 - `teacher_node` receives a `TeacherTask` (`tutor/state.py`), not the shared state.
 - State keys in `tutor/state.py` are named after the node that fills them.
 - `teacher` is `Annotated[list[TaughtStep], operator.add]`, so `teacher_node` must return a **one-item list**. Parallel teachers finish in any order: always sort by `TaughtStep.index` before showing or using them.
@@ -37,13 +41,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Persistence (`api/db.py`)
 
 - Each session's id is also the graph's `thread_id`; `PostgresSaver` checkpoints the full graph state, so `GET /sessions/{id}` rebuilds a session with `graph.get_state(...)`. The `sessions` table only holds the sidebar list (id, title, prompt, created_at).
-- `tutor/graph.py::graph` has no checkpointer (CLI, graph tests); the API compiles its own with `build_graph(checkpointer)` in the lifespan.
+- `tutor/graph.py::graph` has no checkpointer (graph tests); the API compiles its own with `build_graph(checkpointer)` in the lifespan, and `main.py` uses `InMemorySaver`.
+- A paused subgraph's shared keys don't reach the parent until it finishes, so `GET /sessions/{id}` reads a paused dialogue with `get_state(config, subgraphs=True)`.
 - Checkpoints store Pydantic objects; `db.serializer()` allow-lists every model in `tutor/schemas.py` automatically. Models defined elsewhere must be added there or LangGraph will refuse to load them.
 - No migration tool: tables are created with `CREATE TABLE IF NOT EXISTS` at startup.
 
 ## API streaming (`api/main.py`)
 
-- `graph.stream(..., stream_mode="updates")` → SSE events `session` (always first, carries the id), `intake`, `plan`, `lessons`, `review`, `done`, `error`. A failed run deletes its session row and checkpoint thread.
+- `graph.stream(..., stream_mode="updates", subgraphs=True)` → SSE events `session` (always first, carries the id), `intake`, `plan`, `lessons`, `review`, `question`, `wrap_up`, `done`, `error`. Updates are `(namespace, update)` tuples, and a nested interrupt arrives once per graph level, so only the parent-level one is sent.
+- `plan` is sent after `select_method` and only for `structured_lesson`. `done` isn't sent while the graph is paused.
+- `POST /sessions/{id}/answer` resumes a paused session with `Command(resume=...)`. After a failed turn it retries from the failure and keeps the answer already saved.
+- A failed first run deletes its session row and checkpoint thread. A failed resume keeps them.
 - Lessons are buffered and sent as one `lessons` event after the last step.
 - Errors are sent as an `error` event because the 200 response has already started.
 - The generator is sync on purpose so FastAPI runs the blocking Gemini calls in a worker thread.
