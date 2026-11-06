@@ -1,8 +1,8 @@
 // where the FastAPI backend runs; override with VITE_API_URL in frontend/.env if it moves
 export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
-// Start a lesson: events session, intake, then plan, lessons, quiz for a structured lesson (the graph then waits for
-// answers) or question for a Socratic dialogue, done / error.
+// Start a lesson: events session, intake, then what the method teaches (plan and lessons, or analogy) and the check
+// after it (quiz or question), or a dialogue's first question, done / error.
 export const streamTutor = (prompt, onEvent) => streamEvents('/tutor/stream', { prompt }, onEvent)
 
 // Answer the waiting quiz (one picked choice per question, in order):
@@ -10,7 +10,8 @@ export const streamTutor = (prompt, onEvent) => streamEvents('/tutor/stream', { 
 export const submitAnswers = (sessionId, answers, onEvent) =>
   streamEvents(`/sessions/${sessionId}/answers`, { answers }, onEvent)
 
-// Answer the waiting Socratic question: events question, or wrap_up when the dialogue ends, done / error.
+// Answer the waiting text prompt: events question, or at the end wrap_up or check_result (then reexplain if an
+// analogy lesson found gaps), done / error.
 export const answerTutor = (sessionId, answer, onEvent) =>
   streamEvents(`/sessions/${sessionId}/answer`, { answer }, onEvent)
 
@@ -64,7 +65,7 @@ const getJson = async (path) => (await request(path)).json()
 export const listSessions = () => getJson('/sessions')
 
 // one saved session: { id, prompt, method, plan, lessons, followups, rounds: [{ grade, reteach }], waiting, stalled,
-// socratic, in_progress }
+// socratic, worked_faded, check_turns, check_result, analogy_bridging, reexplain, in_progress }
 export const getSession = (id) => getJson(`/sessions/${id}`)
 
 export const deleteSession = (id) => request(`/sessions/${id}`, { method: 'DELETE' })
