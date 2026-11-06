@@ -142,10 +142,12 @@ class ReviewerResult(BaseModel):
 class SelectMethodResult(BaseModel):
     """Which teaching method to use for this request, and why."""
 
-    chosen_method: Literal["structured_lesson", "socratic"] = Field(
+    chosen_method: Literal["structured_lesson", "socratic", "worked_faded", "analogy_bridging"] = Field(
         description="The teaching method that fits this request."
     )
-    request_type: Literal["overview", "specific_confusion", "told_fact", "unclear"] = Field(
+    request_type: Literal[
+        "overview", "specific_confusion", "told_fact", "procedure", "abstract_concept", "unclear"
+    ] = Field(
         description="The underlying type of request, even when the student names a teaching style."
     )
     reason: str = Field(description="One line explaining the choice.")
@@ -269,3 +271,94 @@ class RetaughtStep(ReteachResult):
     step: str = Field(description="The plan step that was retaught.")
     index: int = Field(description="Position of that step in the plan (0-based).")
     round: int = Field(description="The quiz round whose miss caused this reteach.")
+
+# ---------------------------------------------------------------------------
+# Worked-faded subgraph
+# ---------------------------------------------------------------------------
+
+class FadedStep(BaseModel):
+    """One step of a solved problem."""
+
+    task: str = Field(description="What this step has to do, without giving away its result.")
+    work: str = Field(description="The step carried out, in plain text.")
+    why: str = Field(description="One line on why this step works.")
+
+
+class FadedProblem(BaseModel):
+    """A problem and its solved steps."""
+
+    problem: str = Field(description="The problem to solve, in plain text.")
+    steps: list[FadedStep] = Field(description="The solution, as 3 or 4 steps in order.")
+    why_question: str = Field(description="One question asking why a specific step of this solution works.")
+
+
+class StepEvaluation(BaseModel):
+    """Whether the student's answer is right, and what to tell them."""
+
+    correct: bool = Field(description="True if the answer does what the step requires, even if worded differently.")
+    feedback: str = Field(description="One line of feedback for the student.")
+
+
+class FadedWrapUp(BaseModel):
+    """How a worked-faded lesson ends."""
+
+    text: str = Field(description="The closing message to the student.")
+
+# ---------------------------------------------------------------------------
+# Analogy-bridging subgraph
+# ---------------------------------------------------------------------------
+
+class AnalogyLesson(BaseModel):
+    """A concept taught through something the student already knows."""
+
+    analogy: str = Field(description="The everyday thing being compared to the concept.")
+    explanation: str = Field(description="The concept explained through the analogy.")
+    mapping: list[str] = Field(description="Each pair, written as 'this part of the analogy = this part of the concept'.")
+    limits: str = Field(description="Where the analogy breaks down, so the student doesn't carry over wrong ideas.")
+
+
+class ReexplainResult(BaseModel):
+    """One more explanation covering what the check found missing."""
+
+    text: str = Field(description="The re-explanation, written to the student.")
+
+# ---------------------------------------------------------------------------
+# Understanding checks
+# ---------------------------------------------------------------------------
+
+class CheckResult(BaseModel):
+    """What every understanding check writes when it finishes."""
+
+    check_type: str
+    passed: bool
+    gaps: list[str]
+
+
+class PickCheckResult(BaseModel):
+    """Which understanding check to run, and why."""
+
+    check: Literal["quiz", "retrieval_practice", "teach_back", "erroneous_examples"] = Field(
+        description="The check that will most effectively show whether the student understood."
+    )
+    reason: str = Field(description="One line explaining the choice.")
+
+
+class GapEvaluation(BaseModel):
+    """What a check found missing from the student's answer."""
+
+    gaps: list[str] = Field(
+        default_factory=list, description="Each thing the student missed or got wrong, one short line each. Empty if none."
+    )
+
+
+class TeachBackTurn(BaseModel):
+    """The confused student's next move."""
+
+    follow_up: Optional[str] = Field(None, description="The next naive question, or empty to stop asking.")
+
+
+class ErroneousExample(BaseModel):
+    """A solution or explanation with one planted mistake."""
+
+    example: str = Field(description="The solution or explanation shown to the student, containing the mistake.")
+    mistake: str = Field(description="What the mistake is and how to fix it. Never shown to the student.")

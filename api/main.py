@@ -119,9 +119,10 @@ def waiting_quiz(snapshot) -> dict | None:
 def events(graph, sessions, session_id: uuid.UUID, graph_input, first_run: bool):
     """Run (or resume) the graph and yield SSE frames until it finishes or pauses for the student.
 
-    First run: session, intake, then for a structured lesson plan, lessons (all at once), quiz; for a Socratic
-    dialogue the first question. Answer runs: grade, then reteach + the next quiz if anything was missed; or the
-    next question, ending with wrap_up. Every stream ends with done (or error).
+    First run: session, intake, then what the method teaches (plan and lessons, or analogy) and the check that
+    follows it (quiz or question), or a dialogue's first question. Answer runs: grade, then reteach + the next quiz if
+    anything was missed; or the next question. A check ends with check_result, then reexplain if an analogy lesson
+    found gaps; a dialogue ends with wrap_up. Every stream ends with done (or error).
     """
     if first_run:
         yield sse("session", {"id": str(session_id)})
@@ -157,6 +158,14 @@ def events(graph, sessions, session_id: uuid.UUID, graph_input, first_run: bool)
                         yield sse("plan", plan.model_dump())
                 elif node == "wrap_up":
                     yield sse("wrap_up", {"text": output["socratic"][0].text, "outcome": output["outcome"]})
+                elif node == "faded_wrap_up":
+                    yield sse("wrap_up", {"text": output["worked_faded"][0].text, "outcome": output["outcome"]})
+                elif node == "analogy_lesson":
+                    yield sse("analogy", output["analogy_bridging"].model_dump())
+                elif node == "reexplain":
+                    yield sse("reexplain", {"text": output["reexplain"]})
+                elif node == "check_result":
+                    yield sse("check_result", output["check_result"].model_dump())
                 elif node == "teacher":
                     lessons.append(lesson_payload(output["teacher"][0], total))  # one update per parallel teacher
                     if len(lessons) == total:  # every step taught: send them all now, while the reviewer writes questions
@@ -200,12 +209,10 @@ def tutor_stream(req: TutorRequest, request: Request) -> StreamingResponse:
 
 @app.post("/sessions/{session_id}/answer")
 def answer_question(session_id: uuid.UUID, req: AnswerRequest, request: Request) -> StreamingResponse:
-    """Continue a paused Socratic dialogue; after a failed turn this also retries it, keeping the answer already saved."""
+    """Answer a paused text prompt; after a failed turn this also retries it, keeping the answer already saved."""
     graph = request.app.state.graph
-    snapshot, values = state_of(graph, session_id)
-    selected = values.get("select_method")
-    # a quiz wants one pick per question, so text must not reach it
-    if not snapshot.next or not selected or selected.chosen_method != "socratic":
+    snapshot, _ = state_of(graph, session_id)
+    if not snapshot.next or waiting_quiz(snapshot):  # a quiz wants one pick per question, so text must not reach it
         raise HTTPException(status_code=409, detail="This session isn't waiting for an answer")
     return StreamingResponse(
         events(graph, request.app.state.sessions, session_id, resume_with(snapshot, req.answer), first_run=False),
@@ -229,6 +236,8 @@ def get_session(session_id: uuid.UUID, request: Request) -> dict:
     taught = sorted(values.get("teacher", []), key=lambda t: t.index)
     selected = values.get("select_method")
     retaught = values.get("reteacher", [])
+    analogy = values.get("analogy_bridging")
+    check_result = values.get("check_result")
     return {
         "id": str(session_id),
         "prompt": values["user_prompt"],
@@ -244,6 +253,11 @@ def get_session(session_id: uuid.UUID, request: Request) -> dict:
         "waiting": waiting_quiz(snapshot),  # the quiz waiting for answers
         "stalled": stalled(snapshot),
         "socratic": [turn.model_dump() for turn in values.get("socratic", [])],
+        "worked_faded": [turn.model_dump() for turn in values.get("worked_faded", [])],
+        "check_turns": [turn.model_dump() for turn in values.get("check_turns", [])],
+        "check_result": check_result.model_dump() if check_result else None,
+        "analogy_bridging": analogy.model_dump() if analogy else None,
+        "reexplain": values.get("reexplain"),
         "in_progress": bool(snapshot.next),
     }
 

@@ -37,8 +37,10 @@ print(state["planner"].model_dump_json(indent=2))
 print(state["select_method"].model_dump_json(indent=2))
 for result in sorted(state.get("teacher", []), key=lambda t: t.index):  # teachers run in parallel, so restore plan order
     print(result.model_dump_json(indent=2))
+if state.get("analogy_bridging"):
+    print(state["analogy_bridging"].model_dump_json(indent=2))
 
-# both methods pause the graph for the student: a quiz wants picks, a Socratic question wants a typed answer
+# the graph pauses for the student: a quiz wants picks, any other prompt wants a typed answer
 while snapshot.interrupts:
     pause = snapshot.interrupts[0].value
     is_quiz = "questions" in pause
@@ -51,8 +53,13 @@ while snapshot.interrupts:
         for retaught in sorted((r for r in state.get("reteacher", []) if r.round == graded.round), key=lambda r: r.index):
             print(f"\nLet's look at '{retaught.step}' again.\n{retaught.misconception}\n{retaught.explanation}")
 
-if state.get("socratic"):
-    print(state["socratic"][-1].text)  # the wrap-up
+for dialogue in ("socratic", "worked_faded"):
+    if state.get(dialogue):
+        print(state[dialogue][-1].text)  # the wrap-up
+if state.get("check_result"):
+    print(state["check_result"].model_dump_json(indent=2))
+if state.get("reexplain"):
+    print(state["reexplain"])
 if state.get("grader"):
     missed = {a.index: a.step for g in state["grader"] for a in g.answers if not a.is_correct}
     fixed = {a.index for g in state["grader"] for a in g.answers if a.is_correct}

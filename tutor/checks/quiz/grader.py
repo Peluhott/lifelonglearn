@@ -1,5 +1,6 @@
 from langgraph.types import interrupt
 
+from tutor.checks.context import taught_steps
 from tutor.schemas import GradedAnswer, GraderResult, QuizQuestion
 from tutor.state import TutorState
 
@@ -17,8 +18,7 @@ def current_questions(state: TutorState) -> list[QuizQuestion]:
         if not reviewer:
             return []
         # the reviewer writes one question per taught step, in step order
-        taught = sorted(state.get("teacher", []), key=lambda t: t.index)
-        return [QuizQuestion(**q.model_dump(), index=t.index) for t, q in zip(taught, reviewer.questions)]
+        return [QuizQuestion(**q.model_dump(), index=t.index) for t, q in zip(taught_steps(state), reviewer.questions)]
     retaught = sorted((r for r in state.get("reteacher", []) if r.round == rounds_done), key=lambda r: r.index)
     return [QuizQuestion(**r.question.model_dump(), index=r.index) for r in retaught]
 

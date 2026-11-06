@@ -1,21 +1,18 @@
 from langgraph.types import Send
 
 from tutor import llm, prompts
-from tutor.schemas import ReviewerResult, TaughtStep, TeacherResult
+from tutor.schemas import TaughtStep, TeacherResult
 from tutor.state import TeacherTask, TutorState
 from tutor.tools.images import generate_image
 
 TEACHER_INSTRUCTIONS = prompts.load("teacher")
-REVIEWER_INSTRUCTIONS = prompts.load("reviewer")
-
-MAX_RETEACHES = 2  # per step; after that a missed step ends as "still needs work"
 
 
 def teach_every_step(state: TutorState):
-    """Start one teacher per plan step, all at once; with no steps, go straight to the reviewer."""
+    """Start one teacher per plan step, all at once; with no steps, there is nothing to check."""
     plan = state["planner"]
     if not plan.steps:
-        return "reviewer"
+        return "finish"
     # each Send runs the teacher with its own small input instead of the shared state
     return [Send("teacher", {"planner": plan, "step_index": i}) for i in range(len(plan.steps))]
 
@@ -39,37 +36,6 @@ def teacher_node(task: TeacherTask) -> dict:
 
     taught = TaughtStep(**result.model_dump(), image=image, index=index)
     return {"teacher": [taught]}  # a list so it gets appended next to the other teachers' results
-
-
-def reviewer_node(state: TutorState) -> dict:
-    taught = sorted(state.get("teacher", []), key=lambda t: t.index)  # parallel teachers finish in any order
-    if not taught:
-        return {}                            # nothing was taught, so there's nothing to review
-    plan = state["planner"]
-    lessons = "\n\n".join(f"Step: {t.step}\nExplanation: {t.explanation}" for t in taught)
-    result = llm.structured(
-        system=REVIEWER_INSTRUCTIONS,
-        content=f"Concept: {plan.concept_to_teach}\nMethod: {plan.method}\n\n{lessons}",
-        schema=ReviewerResult,
-    )
-    return {"reviewer": result}  # one call covers every step
-
-
-def reteach_missed(state: TutorState):
-    """After a graded round, reteach every missed step that still has retries left (in parallel); otherwise finish."""
-    rounds = state.get("grader", [])
-    if not rounds:
-        return "finish"
-    latest = rounds[-1]
-    taught = {t.index: t for t in state["teacher"]}
-    retaught = state.get("reteacher", [])
-    sends = []
-    for graded in latest.answers:
-        earlier = [r for r in retaught if r.index == graded.index]
-        if not graded.is_correct and len(earlier) < MAX_RETEACHES:
-            task = {"planner": state["planner"], "step": taught[graded.index], "graded": graded, "earlier": earlier, "round": latest.round}
-            sends.append(Send("reteacher", task))
-    return sends or "finish"
 
 
 def finish_node(state: TutorState) -> dict:

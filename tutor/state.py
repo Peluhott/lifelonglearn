@@ -1,8 +1,11 @@
 import operator
 from typing import Annotated, TypedDict
 
+from tutor.schemas import AnalogyLesson
+from tutor.schemas import CheckResult
 from tutor.schemas import DialogueTurn
 from tutor.schemas import IntakeResult
+from tutor.schemas import PickCheckResult
 from tutor.schemas import PlannerResult
 from tutor.schemas import SelectMethodResult
 from tutor.schemas import TaughtStep
@@ -20,8 +23,29 @@ class TutorState(TypedDict, total=False):
     reviewer: ReviewerResult  # the questions the reviewer agent wrote, one per taught step
     socratic: Annotated[list[DialogueTurn], operator.add]  # the dialogue, shared so a finished session can reopen
     outcome: str              # "completed" or "stuck", set by whichever method ran
+    pick_check: PickCheckResult  # which understanding check runs and why
+    check_result: CheckResult    # whether the student passed, and the gaps
+    check_turns: Annotated[list[DialogueTurn], operator.add]  # prompts and answers of a text check, so it can reopen
+    worked_faded: Annotated[list[DialogueTurn], operator.add]  # the worked-faded dialogue, so it can reopen
+    analogy_bridging: AnalogyLesson  # the analogy lesson
+    reexplain: str            # the one re-explanation after a check found gaps
     grader: Annotated[list[GraderResult], operator.add]  # one graded quiz round per entry, in order
     reteacher: Annotated[list[RetaughtStep], operator.add]  # reteaches of missed steps, across all rounds (use .round / .index)
+
+
+class CheckOutput(TypedDict, total=False):
+    """All a check hands back to its method. Without this, a check built on TutorState would also return the
+    method's whole `teacher` list when it finishes, and the reducer would append every lesson a second time."""
+    check_result: CheckResult
+    check_turns: Annotated[list[DialogueTurn], operator.add]
+    reviewer: ReviewerResult
+    grader: Annotated[list[GraderResult], operator.add]
+    reteacher: Annotated[list[RetaughtStep], operator.add]
+
+
+class CheckState(TutorState, total=False):
+    """TutorState plus what the text checks keep to themselves."""
+    last_answer: str
 
 
 class TeacherTask(TypedDict):
