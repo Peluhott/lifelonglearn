@@ -1,9 +1,21 @@
+from langgraph.types import Send
+
 from tutor import llm, prompts
 from tutor.schemas import TaughtStep, TeacherResult
-from tutor.state import TeacherTask
+from tutor.state import TeacherTask, TutorState
 from tutor.tools.images import generate_image
 
 TEACHER_INSTRUCTIONS = prompts.load("teacher")
+
+
+def teach_every_step(state: TutorState):
+    """Start one teacher per plan step, all at once; with no steps, there is nothing to check."""
+    plan = state["planner"]
+    if not plan.steps:
+        return "finish"
+    # each Send runs the teacher with its own small input instead of the shared state
+    return [Send("teacher", {"planner": plan, "step_index": i}) for i in range(len(plan.steps))]
+
 
 def teacher_node(task: TeacherTask) -> dict:
     plan = task["planner"]
@@ -24,3 +36,7 @@ def teacher_node(task: TeacherTask) -> dict:
 
     taught = TaughtStep(**result.model_dump(), image=image, index=index)
     return {"teacher": [taught]}  # a list so it gets appended next to the other teachers' results
+
+
+def finish_node(state: TutorState) -> dict:
+    return {"outcome": "completed"}

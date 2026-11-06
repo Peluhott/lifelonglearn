@@ -1,43 +1,16 @@
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Send
 
 from tutor.agents.intake import intake_node
 from tutor.agents.planner import planner_node
-from tutor.agents.teacher import teacher_node
-from tutor.agents.reviewer import reviewer_node
-from tutor.agents.grader import grader_node
-from tutor.agents.reteacher import reteacher_node
+from tutor.agents.select_method import select_method_node
+from tutor.methods import METHODS
 from tutor.serde import serializer
 from tutor.state import TutorState
 
-MAX_RETEACHES = 2  # per step; after that a missed step ends as "still needs work"
 
-
-def teach_every_step(state: TutorState):
-    """Start one teacher per plan step, all at once; with no steps, go straight to the reviewer."""
-    plan = state["planner"]
-    if not plan.steps:
-        return "reviewer"
-    # each Send runs the teacher with its own small input instead of the shared state
-    return [Send("teacher", {"planner": plan, "step_index": i}) for i in range(len(plan.steps))]
-
-
-def reteach_missed(state: TutorState):
-    """After a graded round, reteach every missed step that still has retries left (in parallel); otherwise finish."""
-    rounds = state.get("grader", [])
-    if not rounds:
-        return END
-    latest = rounds[-1]
-    taught = {t.index: t for t in state["teacher"]}
-    retaught = state.get("reteacher", [])
-    sends = []
-    for graded in latest.answers:
-        earlier = [r for r in retaught if r.index == graded.index]
-        if not graded.is_correct and len(earlier) < MAX_RETEACHES:
-            task = {"planner": state["planner"], "step": taught[graded.index], "graded": graded, "earlier": earlier, "round": latest.round}
-            sends.append(Send("reteacher", task))
-    return sends or END
+def route_to_method(state: TutorState) -> str:
+    return state["select_method"].chosen_method
 
 # register state in graph
 builder = StateGraph(TutorState)        # a graph whose shared state is TutorState
@@ -46,26 +19,48 @@ builder = StateGraph(TutorState)        # a graph whose shared state is TutorSta
 #register the agents as nodes in the graph
 builder.add_node("intake", intake_node) # register intake
 builder.add_node("planner", planner_node) # register planner
-builder.add_node("teacher", teacher_node) # register teacher
-builder.add_node("reviewer", reviewer_node) # register reviewer
-builder.add_node("grader", grader_node)
-builder.add_node("reteacher", reteacher_node)
+builder.add_node("select_method", select_method_node) # register select_method
+for name, build_method in METHODS.items():
+    builder.add_node(name, build_method())  # each teaching method is a compiled subgraph
+    builder.add_edge(name, END)
 
 
 
 #start mapping out the graph
 builder.add_edge(START, "intake")       # first thing that runs
 builder.add_edge("intake", "planner")
-builder.add_conditional_edges("planner", teach_every_step, ["teacher", "reviewer"])
-builder.add_edge("teacher", "reviewer")  # waits for every parallel teacher to finish, then runs once
-builder.add_edge("reviewer", "grader")  # the grader pauses (interrupt) until the student's answers come back
-builder.add_conditional_edges("grader", reteach_missed, ["reteacher", END])
-builder.add_edge("reteacher", "grader")  # waits for every parallel reteacher, then quizzes the retaught steps
+builder.add_edge("planner", "select_method")
+builder.add_conditional_edges("select_method", route_to_method, list(METHODS))
 
 
 def build_graph(checkpointer=None):
     """Compile the graph; with a checkpointer, every run's state is saved under its thread_id."""
     return builder.compile(checkpointer=checkpointer)
+
+
+def method_values(snapshot) -> dict:
+    """Session state from `get_state(config, subgraphs=True)`.
+
+    A subgraph only hands its shared keys to the parent when it finishes, so while a method is
+    paused or has failed, what it has produced so far is only in the subgraph's own state.
+    """
+    values = dict(snapshot.values)
+    for task in snapshot.tasks:
+        if task.state:
+            values.update(method_values(task.state))
+    return values
+
+
+def live_snapshot(snapshot):
+    """The innermost running subgraph's snapshot from `get_state(config, subgraphs=True)`.
+
+    Read `.interrupts` here, not on the parent: the parent keeps reporting an interrupt its
+    subgraph has already moved past, until the subgraph finishes.
+    """
+    for task in snapshot.tasks:
+        if task.state:
+            return live_snapshot(task.state)
+    return snapshot
 
 
 graph = build_graph(InMemorySaver(serde=serializer()))  # CLI and tests; interrupts need a checkpointer, so pass a thread_id

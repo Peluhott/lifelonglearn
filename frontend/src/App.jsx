@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  answerTutor,
   API_URL,
   askAboutStep,
   deleteSession,
@@ -13,6 +14,13 @@ import './App.css'
 
 const ERROR_TEXT = 'Something went wrong. Please try again.'
 
+// what a text check found: the gaps, or that there weren't any
+const checkMessage = ({ passed, gaps }) => ({
+  role: 'assistant',
+  kind: 'text',
+  content: passed ? 'Nice work, you covered it all.' : `Worth another look:\n${gaps.map((gap) => `- ${gap}`).join('\n')}`,
+})
+
 const shortDate = (iso) => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 
 function App() {
@@ -21,13 +29,16 @@ function App() {
   const [draft, setDraft] = useState('')
   const [status, setStatus] = useState(null) // what the tutor is doing right now ("Planning…"), null when idle
   const [pendingQuiz, setPendingQuiz] = useState(null) // { round, questions } held back until the student clicks to continue
+  const [pendingCheck, setPendingCheck] = useState(null) // a text check's prompt, held back the same way
   const [sessions, setSessions] = useState([]) // past sessions for the sidebar
   const [sessionId, setSessionId] = useState(null) // the session on screen, null for a new lesson
+  const [inDialogue, setInDialogue] = useState(false) // a Socratic dialogue is under way, so a message answers it
   const [confirmingDelete, setConfirmingDelete] = useState(null) // id of the sidebar row asking "Delete?"
   const [page, setPage] = useState(0) // the lesson pager's page: 0 is the plan, 1..n are the steps
   const [asking, setAsking] = useState(null) // { index, question } waiting for an answer
   const [askFailed, setAskFailed] = useState(null) // step index whose last question failed
   const shownSession = useRef(null) // sessionId without waiting for a render, for answers that arrive late
+  const lessonShowing = useRef(false) // a check's first prompt has to wait until the student has read the lesson
   const gradedThisRun = useRef(false) // an answer run that fails after grading leaves the graph stalled, not waiting
   const scrollRef = useRef(null)
   const textareaRef = useRef(null)
@@ -89,6 +100,7 @@ function App() {
     if (event === 'session') {
       showSession(data.id)
     } else if (event === 'plan') {
+      lessonShowing.current = true
       addMessage({ role: 'assistant', kind: 'lesson', plan: data, lessons: null, followups: [] }) // lessons arrive later
       setStatus('Writing up the lessons…')
     } else if (event === 'lessons') {
@@ -102,6 +114,25 @@ function App() {
       if (data.score < data.total) setStatus('Taking another look at what you missed…')
     } else if (event === 'reteach') {
       addMessage({ role: 'assistant', kind: 'reteach', steps: data.steps })
+    } else if (event === 'analogy') {
+      lessonShowing.current = true
+      addMessage({ role: 'assistant', kind: 'analogy', lesson: data })
+      setStatus('Getting your questions ready…')
+    } else if (event === 'question') {
+      if (lessonShowing.current) {
+        setPendingCheck(data.question)
+      } else {
+        addMessage({ role: 'assistant', kind: 'text', content: data.question })
+        setInDialogue(true)
+      }
+    } else if (event === 'wrap_up') {
+      addMessage({ role: 'assistant', kind: 'text', content: data.text })
+      setInDialogue(false)
+    } else if (event === 'check_result') {
+      setInDialogue(false)
+      if (data.check_type !== 'quiz') addMessage(checkMessage(data)) // a quiz shows its own results
+    } else if (event === 'reexplain') {
+      addMessage({ role: 'assistant', kind: 'text', content: data.text })
     } else if (event === 'error') {
       // after grading, the graph is stuck between nodes and needs a resume, not new answers
       addMessage({ role: 'assistant', kind: 'text', content: ERROR_TEXT, error: true, retry: gradedThisRun.current })
@@ -138,18 +169,29 @@ function App() {
   // with a finished lesson on screen, the composer asks about the step being read
   const askMode = Boolean(sessionId && lesson?.lessons && !quizShowing)
 
+  const clearPending = () => {
+    setPendingQuiz(null)
+    setPendingCheck(null)
+    lessonShowing.current = false
+  }
+
   const send = async () => {
     const text = draft.trim()
     if (!text || loading) return
     if (askMode) return askStep(page - 1, text)
-    // every new topic is its own saved session, so start from a clean screen
-    setMessages([{ role: 'user', kind: 'text', content: text }])
-    showSession(null)
     setDraft('')
-    setStatus('Planning…')
-    setPendingQuiz(null)
+    if (inDialogue) {
+      addMessage({ role: 'user', kind: 'text', content: text })
+      setStatus('Thinking…')
+    } else {
+      // outside a dialogue every new topic is its own saved session, so start from a clean screen
+      setMessages([{ role: 'user', kind: 'text', content: text }])
+      showSession(null)
+      setStatus('Planning…')
+      clearPending()
+    }
     try {
-      await streamTutor(text, onEvent)
+      await (inDialogue ? answerTutor(sessionId, text, onEvent) : streamTutor(text, onEvent))
     } catch {
       addMessage({ role: 'assistant', kind: 'text', content: ERROR_TEXT, error: true })
     } finally {
@@ -162,7 +204,8 @@ function App() {
     if (loading) return
     setMessages([])
     showSession(null)
-    setPendingQuiz(null)
+    clearPending()
+    setInDialogue(false)
   }
 
   const removeSession = async (id) => {
@@ -202,19 +245,50 @@ function App() {
   const openSession = async (id) => {
     if (loading || id === sessionId) return
     showSession(id)
-    setPendingQuiz(null)
+    clearPending()
+    setInDialogue(false)
     try {
       const saved = await getSession(id)
       const rebuilt = [{ role: 'user', kind: 'text', content: saved.prompt }]
-      if (!saved.rounds.length && saved.plan) {
-        rebuilt.push({ role: 'assistant', kind: 'lesson', plan: saved.plan, lessons: saved.lessons, followups: saved.followups })
+      const addTurns = (turns) => {
+        for (const turn of turns) {
+          rebuilt.push({ role: turn.role === 'student' ? 'user' : 'assistant', kind: 'text', content: turn.text })
+        }
+      }
+      const dialogue = { socratic: saved.socratic, worked_faded: saved.worked_faded }[saved.method]
+      if (dialogue) {
+        addTurns(dialogue)
+        setMessages(rebuilt)
+        setInDialogue(saved.in_progress) // an unfinished dialogue picks up where it left off
+        return
+      }
+
+      // a text check that hasn't been answered yet waits behind the lesson, as it did the first time
+      const checkHeld = saved.in_progress && saved.check_turns.length === 1
+      const checkStarted = saved.check_turns.length > 0 && !checkHeld
+      if (!saved.rounds.length && !checkStarted) {
+        if (saved.analogy_bridging) {
+          rebuilt.push({ role: 'assistant', kind: 'analogy', lesson: saved.analogy_bridging })
+        } else if (saved.plan) {
+          rebuilt.push({ role: 'assistant', kind: 'lesson', plan: saved.plan, lessons: saved.lessons, followups: saved.followups })
+        }
+      }
+      if (checkHeld) {
+        setPendingCheck(saved.check_turns[0].text)
+        lessonShowing.current = true
+      }
+      if (checkStarted) {
+        addTurns(saved.check_turns)
+        setInDialogue(saved.in_progress)
       }
       for (const { grade, reteach } of saved.rounds) {
         // a graded answer carries its question and choices, so it can stand in for the question
         rebuilt.push({ role: 'assistant', kind: 'review', round: grade.round, questions: grade.answers, grade })
         if (reteach.steps.length) rebuilt.push({ role: 'assistant', kind: 'reteach', steps: reteach.steps })
       }
-      if (saved.stalled) rebuilt.push({ role: 'assistant', kind: 'text', content: ERROR_TEXT, error: true, retry: true })
+      if (saved.check_result && saved.check_result.check_type !== 'quiz') rebuilt.push(checkMessage(saved.check_result))
+      if (saved.reexplain) rebuilt.push({ role: 'assistant', kind: 'text', content: saved.reexplain })
+      if (saved.stalled && !checkStarted) rebuilt.push({ role: 'assistant', kind: 'text', content: ERROR_TEXT, error: true, retry: true })
       setMessages(rebuilt)
       setPendingQuiz(saved.waiting)
     } catch {
@@ -234,12 +308,26 @@ function App() {
   const showQuestions = () => {
     const quiz = { role: 'assistant', kind: 'review', round: pendingQuiz.round, questions: pendingQuiz.questions, grade: null }
     setMessages((prev) => {
-      if (prev.at(-1)?.kind !== 'lesson') return [...prev, quiz]
+      if (!['lesson', 'analogy'].includes(prev.at(-1)?.kind)) return [...prev, quiz]
       const lastUser = prev.findLastIndex((m) => m.role === 'user')
       return [...prev.slice(0, lastUser + 1), quiz]
     })
     setPendingQuiz(null)
   }
+
+  // show the waiting text check; it replaces the lesson, so retrieval practice really is from memory
+  const showCheck = () => {
+    setMessages((prev) => {
+      const lastUser = prev.findLastIndex((m) => m.role === 'user')
+      return [...prev.slice(0, lastUser + 1), { role: 'assistant', kind: 'text', content: pendingCheck }]
+    })
+    setPendingCheck(null)
+    lessonShowing.current = false
+    setInDialogue(true)
+  }
+
+  const checkReady = pendingQuiz !== null || pendingCheck !== null
+  const continueToCheck = pendingQuiz ? showQuestions : showCheck
 
   const quizzes = messages.filter((m) => m.kind === 'review')
   // finished: the last thing on screen is a graded quiz and nothing else is coming
@@ -249,6 +337,8 @@ function App() {
   const cantSend = loading || !draft.trim() || onPlanPage || quizShowing || asking !== null
   const placeholder = loading
     ? 'Type a message'
+    : inDialogue
+      ? 'Type your answer'
     : quizShowing
       ? 'Quiz time. Use + New lesson to learn something else'
       : onPlanPage
@@ -315,8 +405,15 @@ function App() {
                     asking={asking}
                     askFailed={askFailed}
                     // only the newest lesson can move on to the questions that just came back
-                    questionsReady={i === messages.length - 1 && pendingQuiz !== null}
-                    onContinue={showQuestions}
+                    questionsReady={i === messages.length - 1 && checkReady}
+                    onContinue={continueToCheck}
+                  />
+                ) : m.kind === 'analogy' ? (
+                  <Analogy
+                    key={`${sessionId}-${i}`}
+                    lesson={m.lesson}
+                    questionsReady={i === messages.length - 1 && checkReady}
+                    onContinue={continueToCheck}
                   />
                 ) : m.kind === 'review' ? (
                   <Quiz
@@ -354,7 +451,6 @@ function App() {
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={onKeyDown}
                 placeholder={placeholder}
-                disabled={onPlanPage || quizShowing}
               />
               <button className="send" onClick={send} disabled={cantSend}>
                 Send
@@ -446,6 +542,28 @@ function Lesson({ plan, lessons, followups, page, setPage, asking, askFailed, qu
             Next →
           </button>
         )}
+      </div>
+    </div>
+  )
+}
+
+// an analogy lesson: the explanation, what maps to what, and where the comparison stops working
+function Analogy({ lesson, questionsReady, onContinue }) {
+  return (
+    <div className="msg msg-tutor pager">
+      <div className="lesson-title">Think of it like {lesson.analogy}</div>
+      {lesson.explanation}
+      <ul className="plan-steps">
+        {lesson.mapping.map((pair) => (
+          <li key={pair}>{pair}</li>
+        ))}
+      </ul>
+      <div className="lesson-title">Where the analogy breaks down</div>
+      {lesson.limits}
+      <div className="pager-nav">
+        <button className="pager-next" onClick={onContinue} disabled={!questionsReady}>
+          Continue to questions →
+        </button>
       </div>
     </div>
   )
