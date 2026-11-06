@@ -7,6 +7,9 @@ from tutor.schemas import PlannerResult
 from tutor.schemas import SelectMethodResult
 from tutor.schemas import TaughtStep
 from tutor.schemas import ReviewerResult
+from tutor.schemas import GradedAnswer
+from tutor.schemas import GraderResult
+from tutor.schemas import RetaughtStep
 # a shared state between agents, as we add more agents it will grow and more fields will be added
 class TutorState(TypedDict, total=False):
     user_prompt: str          # what the student typed
@@ -17,9 +20,20 @@ class TutorState(TypedDict, total=False):
     reviewer: ReviewerResult  # the questions the reviewer agent wrote, one per taught step
     socratic: Annotated[list[DialogueTurn], operator.add]  # the dialogue, shared so a finished session can reopen
     outcome: str              # "completed" or "stuck", set by whichever method ran
+    grader: Annotated[list[GraderResult], operator.add]  # one graded quiz round per entry, in order
+    reteacher: Annotated[list[RetaughtStep], operator.add]  # reteaches of missed steps, across all rounds (use .round / .index)
 
 
 class TeacherTask(TypedDict):
     """What each parallel teacher gets instead of the shared state (sent by teach_every_step)."""
     planner: PlannerResult
     step_index: int
+
+
+class ReteachTask(TypedDict):
+    """What each parallel reteacher gets (sent by reteach_missed)."""
+    planner: PlannerResult
+    step: TaughtStep
+    graded: GradedAnswer           # the question they missed and what they picked
+    earlier: list[RetaughtStep]    # earlier reteaches of this step, so a retry takes a new angle
+    round: int

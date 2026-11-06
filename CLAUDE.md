@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Running
 
-- CLI: `.venv/bin/python main.py` (reads a prompt from stdin, prints each node's result)
+- CLI: `.venv/bin/python main.py` (reads a prompt from stdin, prints each node's result, then asks the quiz rounds A–D in the terminal)
 - API: `uvicorn api.main:app --reload` (port 8000, which `frontend/src/api.js` expects). Needs Postgres at `DATABASE_URL`; startup creates the tables.
 - Frontend: `cd frontend && npm run dev`; lint with `npm run lint` (oxlint). Plain JS, not TypeScript.
 - Install: `.venv/bin/pip install -r requirements.txt`. Nothing is pinned.
@@ -24,15 +24,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Flow: intake → planner → select_method → one method subgraph → END, wired in `tutor/graph.py`. The parent adds a node and route for each entry in `METHODS` (`tutor/methods/__init__.py`), routing on `state["select_method"].chosen_method`.
 - Parent nodes live in `tutor/agents/`; each method lives in `tutor/methods/<name>/` (`graph.py` with `build_graph()`, `nodes.py`). Subgraphs have no checkpointer of their own.
-- `structured_lesson`: teacher × N **in parallel** → reviewer → finish. `teach_every_step` fans out one `Send("teacher", {"planner", "step_index"})` per plan step (or goes straight to `"reviewer"` if there are none); the reviewer runs once after all teachers finish.
+- `structured_lesson`: teacher × N **in parallel** → reviewer → grader ⇄ reteacher × missed → finish. `teach_every_step` fans out one `Send("teacher", {"planner", "step_index"})` per plan step (or goes straight to `"reviewer"` if there are none); the reviewer runs once after all teachers finish.
+- **The graph pauses mid-run.** `grader_node` (plain Python, no LLM) calls `interrupt({round, questions})` with the quiz minus `correct_answer`; the run stops until it's resumed with `Command(resume=[one picked choice per question])`. On resume the grader re-runs from the top, so keep everything before `interrupt` side-effect free. Round 1 quizzes the reviewer's questions (index assigned by position); round N quizzes the questions written by round N-1's reteaches.
+- `reteach_missed` sends one `Send("reteacher", ReteachTask)` per wrong answer in the latest round whose step has been retaught fewer than `MAX_RETEACHES` (2) times, else `"finish"`. `reteacher → grader` waits for all of them, then quizzes again.
 - `socratic`: set_target → ask_question → wait_for_answer → evaluate_answer → ask_question, give_hint, or wrap_up. Only `wait_for_answer` calls `interrupt()`, because a node reruns from the top on resume and an LLM call there would run twice. Private keys are in `SocraticState`; the dialogue is the shared `socratic` key. `MAX_TURNS` is a placeholder.
-- `teacher_node` receives a `TeacherTask` (`tutor/state.py`), not the shared state.
+- `teacher_node` and `reteacher_node` receive a `TeacherTask` / `ReteachTask` (`tutor/state.py`), not the shared state.
 - State keys in `tutor/state.py` are named after the node that fills them.
-- `teacher` is `Annotated[list[TaughtStep], operator.add]`, so `teacher_node` must return a **one-item list**. Parallel teachers finish in any order: always sort by `TaughtStep.index` before showing or using them.
+- `teacher`, `grader` and `reteacher` are `Annotated[list[...], operator.add]`, so those nodes return a **one-item list**. Parallel teachers/reteachers finish in any order: always sort by `.index` before showing or using them. With a reducer the key reads as `[]` before anything is added, never missing.
 - All LLM calls go through `tutor/llm.py::structured(system, content, schema)` — don't call the Gemini client directly for text.
 - Prompts are `tutor/prompts/<name>.md`, loaded via `prompts.load(name)` into a module-level `<NAME>_INSTRUCTIONS`.
-- `TeacherResult` is the schema the model fills; `TaughtStep` subclasses it to add `image`, which the model never sees.
-- `reviewer_node` returns `{}` when nothing was taught.
+- `TeacherResult` / `ReteachResult` are the schemas the model fills; `TaughtStep` / `RetaughtStep` subclass them to add fields the model never sees (`image`, `index`, `round`).
+- `reviewer_node` returns `{}` when nothing was taught; `grader_node` returns `{}` (without interrupting) when there's nothing to quiz.
+- Follow-up questions about a step are answered outside the graph by `tutor/agents/followup.py::answer_followup` (prompt `followup.md`) and stored in the `followups` table, **not** graph state: writing a checkpoint with `update_state` while the grader is paused drops the pending interrupt.
 
 ## Images
 
@@ -40,22 +43,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Persistence (`api/db.py`)
 
-- Each session's id is also the graph's `thread_id`; `PostgresSaver` checkpoints the full graph state, so `GET /sessions/{id}` rebuilds a session with `graph.get_state(...)`. The `sessions` table only holds the sidebar list (id, title, prompt, created_at).
-- `tutor/graph.py::graph` has no checkpointer (graph tests); the API compiles its own with `build_graph(checkpointer)` in the lifespan, and `main.py` uses `InMemorySaver`.
-- A paused subgraph's shared keys don't reach the parent until it finishes, so `GET /sessions/{id}` reads a paused dialogue with `get_state(config, subgraphs=True)`.
-- Checkpoints store Pydantic objects; `db.serializer()` allow-lists every model in `tutor/schemas.py` automatically. Models defined elsewhere must be added there or LangGraph will refuse to load them.
+- Each session's id is also the graph's `thread_id`; `PostgresSaver` checkpoints the full graph state, so `GET /sessions/{id}` rebuilds a session with `graph.get_state(...)` (`.interrupts` holds a waiting quiz or Socratic question). Besides checkpoints there are two tables: `sessions` (the sidebar list: id, title, prompt, created_at) and `followups` (`ON DELETE CASCADE` from `sessions`).
+- `tutor/graph.py::graph` uses an `InMemorySaver` (CLI, graph tests) because interrupts need a checkpointer, so always pass a `thread_id`. The API compiles its own with `build_graph(checkpointer)` in the lifespan.
+- **A paused or failed subgraph's shared keys don't reach the parent until it finishes.** While a quiz waits, `teacher`, `reviewer`, `grader` and `reteacher` are only in the subgraph's state, so read a session with `get_state(config, subgraphs=True)` and `tutor/graph.py::method_values(snapshot)` (`state_of()` in `api/main.py`), never plain `.values`. The parent also keeps reporting an interrupt its subgraph has moved past, so read `.interrupts` from `live_snapshot(snapshot)`.
+- Checkpoints store Pydantic objects; `tutor/serde.py::serializer()` (re-exported as `db.serializer`) allow-lists every model in `tutor/schemas.py` automatically. Models defined elsewhere must be added there or LangGraph will refuse to load them.
 - No migration tool: tables are created with `CREATE TABLE IF NOT EXISTS` at startup.
 
 ## API streaming (`api/main.py`)
 
-- `graph.stream(..., stream_mode="updates", subgraphs=True)` → SSE events `session` (always first, carries the id), `intake`, `plan`, `lessons`, `review`, `question`, `wrap_up`, `done`, `error`. Updates are `(namespace, update)` tuples, and a nested interrupt arrives once per graph level, so only the parent-level one is sent.
-- `plan` is sent after `select_method` and only for `structured_lesson`. `done` isn't sent while the graph is paused.
-- `POST /sessions/{id}/answer` resumes a paused session with `Command(resume=...)`. After a failed turn it retries from the failure and keeps the answer already saved.
-- A failed first run deletes its session row and checkpoint thread. A failed resume keeps them.
-- Lessons are buffered and sent as one `lessons` event after the last step.
+- `events()` runs or resumes the graph with `graph.stream(..., stream_mode="updates", subgraphs=True)` and turns updates into SSE events. Updates are `(namespace, update)` tuples, and a nested interrupt arrives once per graph level, so only the parent-level one is sent, as `quiz` if its payload has `questions` and `question` otherwise.
+- First run (`POST /tutor/stream`): `session` (carries the id), `intake`, then for a structured lesson `plan`, `lessons`, `quiz`, or for a dialogue `question`, then `done`. `plan` is sent after `select_method`. Quiz answers (`POST /sessions/{id}/answers`): `grade`, then `reteach` + `quiz` if anything was missed, `done`. Socratic answers (`POST /sessions/{id}/answer`): `question` or `wrap_up`, `done`. `done` ends every stream, paused or not; any stream can end in `error`.
+- Only a failed **first** run deletes its session row and checkpoint thread. A failed answer run leaves the graph "stalled" (nodes left to run, no quiz waiting): `POST /sessions/{id}/resume` re-runs the failed tasks with `None` as input, and `/answer` does the same for a failed Socratic turn, keeping the answer already saved. Always resume by interrupt id (`resume_with()`): a plain `Command(resume=value)` stays in the parent checkpoint and would answer the next pause after a retry.
+- Lessons and reteaches are buffered and each sent as one event.
 - Errors are sent as an `error` event because the 200 response has already started.
 - The generator is sync on purpose so FastAPI runs the blocking Gemini calls in a worker thread.
 - Changing event names or payloads requires matching changes in `frontend/src/api.js`.
+- Other routes: `GET /sessions`, `GET /sessions/{id}` (`method`, `plan`, `lessons`, `followups`, `rounds: [{grade, reteach}]`, `waiting` quiz or null, `stalled`, `socratic`, `in_progress`), `DELETE /sessions/{id}` (sidebar row + follow-ups, checkpoint thread, and the session's image files), `POST /sessions/{id}/steps/{index}/ask` (`{question}` → `{index, question, answer}`; calls Gemini). `/answers` returns 409 unless a quiz is waiting and 422 unless every answer is one of its question's choices; `/answer` returns 409 unless a Socratic session has work left.
 
 ## Conventions
 

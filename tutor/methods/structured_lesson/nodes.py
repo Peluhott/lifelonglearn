@@ -8,6 +8,8 @@ from tutor.tools.images import generate_image
 TEACHER_INSTRUCTIONS = prompts.load("teacher")
 REVIEWER_INSTRUCTIONS = prompts.load("reviewer")
 
+MAX_RETEACHES = 2  # per step; after that a missed step ends as "still needs work"
+
 
 def teach_every_step(state: TutorState):
     """Start one teacher per plan step, all at once; with no steps, go straight to the reviewer."""
@@ -51,6 +53,23 @@ def reviewer_node(state: TutorState) -> dict:
         schema=ReviewerResult,
     )
     return {"reviewer": result}  # one call covers every step
+
+
+def reteach_missed(state: TutorState):
+    """After a graded round, reteach every missed step that still has retries left (in parallel); otherwise finish."""
+    rounds = state.get("grader", [])
+    if not rounds:
+        return "finish"
+    latest = rounds[-1]
+    taught = {t.index: t for t in state["teacher"]}
+    retaught = state.get("reteacher", [])
+    sends = []
+    for graded in latest.answers:
+        earlier = [r for r in retaught if r.index == graded.index]
+        if not graded.is_correct and len(earlier) < MAX_RETEACHES:
+            task = {"planner": state["planner"], "step": taught[graded.index], "graded": graded, "earlier": earlier, "round": latest.round}
+            sends.append(Send("reteacher", task))
+    return sends or "finish"
 
 
 def finish_node(state: TutorState) -> dict:

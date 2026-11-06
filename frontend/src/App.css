@@ -71,25 +71,85 @@
   gap: 2px;
 }
 
+/* a row is the open button plus a delete button that shows on hover */
 .session {
+  display: flex;
+  align-items: center;
+  border-radius: 8px;
+  color: var(--ink-2);
+}
+
+.session:hover,
+.session:focus-within,
+.session.on {
+  background: var(--bubble);
+  color: var(--ink);
+}
+
+.session-open {
+  flex: 1;
+  min-width: 0;
   display: flex;
   justify-content: space-between;
   align-items: baseline;
   gap: 10px;
-  padding: 9px 10px;
+  padding: 9px 4px 9px 10px;
   border: none;
-  border-radius: 8px;
   background: transparent;
-  color: var(--ink-2);
+  color: inherit;
   font: 14px/1.35 var(--font-body);
   text-align: left;
   cursor: pointer;
 }
 
-.session:hover:not(:disabled),
-.session.on {
-  background: var(--bubble);
+.session-delete {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin-right: 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: 18px/1 var(--font-body);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.session:hover .session-delete,
+.session-delete:focus-visible,
+.session-delete.confirm {
+  opacity: 1;
+}
+
+.session-delete:hover:not(:disabled) {
   color: var(--ink);
+  background: var(--surface);
+}
+
+.session-delete.confirm {
+  width: auto;
+  padding: 0 10px;
+  background: var(--error);
+  color: #fff;
+  font: 600 13px var(--font-body);
+}
+
+.session-delete.confirm:hover:not(:disabled) {
+  background: var(--error);
+  color: #fff;
+}
+
+/* the confirm button needs the room the date was using */
+.session.confirming .session-date {
+  display: none;
+}
+
+/* touch screens have no hover, so keep the delete button visible */
+@media (hover: none) {
+  .session-delete {
+    opacity: 1;
+  }
 }
 
 .session-title {
@@ -106,7 +166,8 @@
 }
 
 .new-lesson:disabled,
-.session:disabled {
+.session-open:disabled,
+.session-delete:disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -289,6 +350,18 @@
   flex: none;
 }
 
+/* picked but not graded yet: the grader node reveals right and wrong after "Check answers" */
+.choice.picked {
+  border-color: var(--ink);
+  background: var(--bubble);
+}
+
+.choice.picked .choice-key {
+  background: var(--ink);
+  border-color: transparent;
+  color: #fff;
+}
+
 .choice.right {
   border-color: var(--accent);
   background: var(--right-bg);
@@ -366,6 +439,91 @@
 
 .score {
   font-weight: 600;
+}
+
+.quiz-hint {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+/* ---------- reteach and end-of-lesson summary ---------- */
+.misconception {
+  margin: 8px 0 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--feedback-wrong-bg);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.misconception strong {
+  font-weight: 600;
+}
+
+.summary {
+  padding: 18px 20px;
+  border-radius: 14px;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+.summary p {
+  margin: 8px 0 0;
+}
+
+.summary > strong {
+  display: block;
+  margin-top: 14px;
+  font-weight: 600;
+}
+
+.retry {
+  display: block;
+  margin-top: 10px;
+  font: 600 14px var(--font-body);
+  padding: 9px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--input-border);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.retry:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---------- questions about a lesson step ---------- */
+.step-questions {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--hairline);
+}
+
+.followup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.followup-q {
+  align-self: flex-end;
+  max-width: 80%;
+  background: var(--bubble);
+  border-radius: 14px;
+  padding: 10px 14px;
+}
+
+.followup-a {
+  white-space: pre-wrap;
+}
+
+.ask-error {
+  font-size: 14px;
 }
 
 /* what the tutor is doing right now: Planning…, Writing up the lessons…, Generating questions… */
