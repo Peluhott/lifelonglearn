@@ -22,6 +22,9 @@ const checkMessage = ({ passed, gaps }) => ({
   content: passed ? 'Nice work, you covered it all.' : `Worth another look:\n${gaps.map((gap) => `- ${gap}`).join('\n')}`,
 })
 
+// a test is from memory, so everything before it stays hidden until the test is over
+const putAway = (messages) => messages.map((m, i) => (i === 0 ? m : { ...m, beforeTest: true }))
+
 const shortDate = (iso) => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 
 function App() {
@@ -175,9 +178,15 @@ function App() {
   }
 
   const lesson = messages.find((m) => m.kind === 'lesson')
-  const quizShowing = messages.some((m) => m.kind === 'review' || m.kind === 'reteach')
+  const testing =
+    messages.some((m) => m.beforeTest) &&
+    (loading ||
+      inDialogue ||
+      pendingQuiz !== null ||
+      pendingCheck !== null ||
+      messages.some((m) => m.retry || (m.kind === 'review' && !m.grade)))
   // with a finished lesson on screen, the composer asks about the step being read
-  const askMode = Boolean(sessionId && lesson?.lessons && !quizShowing && !inDialogue)
+  const askMode = Boolean(sessionId && lesson?.lessons && !testing && !inDialogue)
 
   const clearPending = () => {
     setPendingQuiz(null)
@@ -253,7 +262,7 @@ function App() {
     }
   }
 
-  // rebuild a saved session: the lesson until the first quiz is answered, then every graded round and reteach
+  // rebuild a saved session: the lesson and its chat, then every graded round and reteach or the text check
   const openSession = async (id) => {
     if (loading || id === sessionId) return
     showSession(id)
@@ -261,7 +270,7 @@ function App() {
     setInDialogue(false)
     try {
       const saved = await getSession(id)
-      const rebuilt = [{ role: 'user', kind: 'text', content: saved.prompt }]
+      let rebuilt = [{ role: 'user', kind: 'text', content: saved.prompt }]
       const addTurns = (turns) => {
         for (const turn of turns) {
           rebuilt.push({ role: turn.role === 'student' ? 'user' : 'assistant', kind: 'text', content: turn.text })
@@ -278,15 +287,15 @@ function App() {
       // a text check that hasn't been answered yet waits behind the lesson, as it did the first time
       const checkHeld = saved.in_progress && saved.check_turns.length === 1
       const checkStarted = saved.check_turns.length > 0 && !checkHeld
-      if (!saved.rounds.length && !checkStarted) {
-        if (saved.analogy_bridging) {
-          rebuilt.push({ role: 'assistant', kind: 'analogy', lesson: saved.analogy_bridging })
-        } else if (saved.plan) {
-          rebuilt.push({ role: 'assistant', kind: 'lesson', plan: saved.plan, lessons: saved.lessons, followups: saved.followups })
-        }
-        // a test that's waiting goes behind the button on the lesson, which has to stay the last thing on screen
-        if (!saved.waiting && !checkHeld) addTurns(saved.discuss)
+      const tested = saved.rounds.length > 0 || checkStarted
+      if (saved.analogy_bridging) {
+        rebuilt.push({ role: 'assistant', kind: 'analogy', lesson: saved.analogy_bridging })
+      } else if (saved.plan) {
+        rebuilt.push({ role: 'assistant', kind: 'lesson', plan: saved.plan, lessons: saved.lessons, followups: saved.followups })
       }
+      // a first test that's waiting goes behind the button on the lesson, which has to stay the last thing on screen
+      if (tested || (!saved.waiting && !checkHeld)) addTurns(saved.discuss)
+      if (tested) rebuilt = putAway(rebuilt)
       if (saved.discussing && !saved.discuss.length) {
         setPendingDiscuss(saved.discussing)
         lessonShowing.current = true
@@ -325,18 +334,18 @@ function App() {
     }
   }
 
-  // show a quiz: the first one replaces the lesson, later rounds go below the reteach that led to them
+  // show a quiz: the first one puts the lesson away, later rounds go below the reteach that led to them
   const revealQuiz = ({ round, questions }) => {
     const quiz = { role: 'assistant', kind: 'review', round, questions, grade: null }
-    setMessages((prev) => (prev.some((m) => ['lesson', 'analogy'].includes(m.kind)) ? [prev[0], quiz] : [...prev, quiz]))
+    setMessages((prev) => [...(round === 1 ? putAway(prev) : prev), quiz])
     setPendingQuiz(null)
   }
 
   const showQuestions = () => revealQuiz(pendingQuiz)
 
-  // show the waiting text check; it replaces the lesson, so retrieval practice really is from memory
+  // show the waiting text check; it puts the lesson away, so retrieval practice really is from memory
   const showCheck = () => {
-    setMessages((prev) => [prev[0], { role: 'assistant', kind: 'text', content: pendingCheck }])
+    setMessages((prev) => [...putAway(prev), { role: 'assistant', kind: 'text', content: pendingCheck }])
     setPendingCheck(null)
     lessonShowing.current = false
     setInDialogue(true)
@@ -356,7 +365,7 @@ function App() {
     setInDialogue(false)
     if (next === 'test') {
       gradedThisRun.current = true // a test that fails to start needs a resume, not a new message
-      setMessages((prev) => prev.slice(0, 1)) // the test is from memory, so the lesson and chat leave the screen
+      setMessages(putAway)
     }
   }
 
@@ -377,17 +386,17 @@ function App() {
   const finished = !loading && !pendingQuiz && messages.at(-1)?.kind === 'review' && messages.at(-1).grade
 
   const onPlanPage = askMode && page === 0
-  const cantSend = loading || !draft.trim() || onPlanPage || quizShowing || asking !== null
+  const cantSend = loading || !draft.trim() || onPlanPage || testing || asking !== null
   const placeholder = loading
     ? 'Type a message'
     : discussing
       ? 'Ask anything about this lesson…'
     : inDialogue
       ? 'Type your answer'
-    : quizShowing
-      ? 'Quiz time. Use + New lesson to learn something else'
+    : testing
+      ? 'Test in progress…'
       : onPlanPage
-        ? 'Click Next to start, then ask about any step'
+        ? 'Go to a step to ask about it'
         : askMode
           ? `Ask about step ${page}…`
           : 'What would you like to learn?'
@@ -439,7 +448,7 @@ function App() {
               )}
 
               {messages.map((m, i) =>
-                m.kind === 'lesson' ? (
+                m.beforeTest && testing ? null : m.kind === 'lesson' ? (
                   <Lesson
                     key={`${sessionId}-${i}`} // a different session gets a fresh pager instead of keeping the old page
                     plan={m.plan}
@@ -449,15 +458,17 @@ function App() {
                     setPage={setPage}
                     asking={asking}
                     askFailed={askFailed}
-                    // only the newest lesson can move on to the questions that just came back
-                    questionsReady={i === messages.length - 1 && checkReady}
+                    // only the newest lesson can move on; nothing's coming once a session is over
+                    showContinue={i === messages.length - 1 && (checkReady || loading)}
+                    questionsReady={checkReady}
                     onContinue={continueToCheck}
                   />
                 ) : m.kind === 'analogy' ? (
                   <Analogy
                     key={`${sessionId}-${i}`}
                     lesson={m.lesson}
-                    questionsReady={i === messages.length - 1 && checkReady}
+                    showContinue={i === messages.length - 1 && (checkReady || loading)}
+                    questionsReady={checkReady}
                     onContinue={continueToCheck}
                   />
                 ) : m.kind === 'review' ? (
@@ -548,7 +559,7 @@ function Progress({ count, current }) {
 
 // the plan, then each lesson step, one page at a time with Back / Next;
 // the last step's button moves on to the questions
-function Lesson({ plan, lessons, followups, page, setPage, asking, askFailed, questionsReady, onContinue }) {
+function Lesson({ plan, lessons, followups, page, setPage, asking, askFailed, showContinue, questionsReady, onContinue }) {
   const pages = plan.steps.length + 1
   const isLast = page === pages - 1
   const lesson = page > 0 && lessons ? lessons[page - 1] : null
@@ -581,9 +592,11 @@ function Lesson({ plan, lessons, followups, page, setPage, asking, askFailed, qu
           ← Back
         </button>
         {isLast ? (
-          <button className="pager-next" onClick={onContinue} disabled={!questionsReady}>
-            Continue →
-          </button>
+          showContinue && (
+            <button className="pager-next" onClick={onContinue} disabled={!questionsReady}>
+              Continue →
+            </button>
+          )
         ) : (
           // the steps aren't readable until the lessons arrive
           <button className="pager-next" onClick={() => setPage(page + 1)} disabled={!lessons}>
@@ -596,7 +609,7 @@ function Lesson({ plan, lessons, followups, page, setPage, asking, askFailed, qu
 }
 
 // an analogy lesson: the explanation, what maps to what, and where the comparison stops working
-function Analogy({ lesson, questionsReady, onContinue }) {
+function Analogy({ lesson, showContinue, questionsReady, onContinue }) {
   return (
     <div className="msg msg-tutor pager">
       <div className="lesson-title">Think of it like {lesson.analogy}</div>
@@ -608,11 +621,13 @@ function Analogy({ lesson, questionsReady, onContinue }) {
       </ul>
       <div className="lesson-title">Where the analogy breaks down</div>
       {lesson.limits}
-      <div className="pager-nav">
-        <button className="pager-next" onClick={onContinue} disabled={!questionsReady}>
-          Continue →
-        </button>
-      </div>
+      {showContinue && (
+        <div className="pager-nav">
+          <button className="pager-next" onClick={onContinue} disabled={!questionsReady}>
+            Continue →
+          </button>
+        </div>
+      )}
     </div>
   )
 }

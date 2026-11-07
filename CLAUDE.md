@@ -66,6 +66,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Errors are sent as an `error` event because the 200 response has already started.
 - The generator is sync on purpose so FastAPI runs the blocking Gemini calls in a worker thread.
 - Changing event names or payloads requires matching changes in `frontend/src/api.js`.
+- The frontend hides the lesson and chat only while a test runs: `putAway` marks them `beforeTest`, and they come back when `testing` ends, including in `openSession`.
 - Other routes: `GET /sessions`, `GET /sessions/{id}` (`method`, `plan`, `lessons`, `followups`, `rounds: [{grade, reteach}]`, `waiting` quiz or null, `stalled`, `socratic`, `worked_faded`, `discuss`, `discussing` (the tutor's latest line, or null), `check_turns`, `check_result`, `analogy_bridging`, `reexplain`, `in_progress`), `DELETE /sessions/{id}` (sidebar row + follow-ups, checkpoint thread, and the session's image files), `POST /sessions/{id}/steps/{index}/ask` (`{question}` → `{index, question, answer}`; calls Gemini). `/answers` returns 409 unless a quiz is waiting and 422 unless every answer is one of its question's choices; `/answer` returns 409 if a quiz is waiting or the session has finished; `/discussion` returns 409 unless the chat is waiting.
 
 ## Conventions
