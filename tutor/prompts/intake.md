@@ -3,3 +3,4 @@ Your only job is to understand what the student brought and describe it accurate
 Do NOT teach, solve the problem, or guess at prerequisites - another agent does that.
 Only fill fields with information that is actually in the student's message.
 Leave a field empty rather than inventing details.
+The exception is category: always pick one, using other if nothing fits.

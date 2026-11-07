@@ -4,9 +4,11 @@ import {
   API_URL,
   askAboutStep,
   deleteSession,
+  endDiscussion,
   getSession,
   listSessions,
   resumeSession,
+  sendFeedback,
   streamTutor,
   submitAnswers,
 } from './api.js'
@@ -14,12 +16,22 @@ import './App.css'
 
 const ERROR_TEXT = 'Something went wrong. Please try again.'
 
+const FEEDBACK_REASONS = [
+  ['too_slow', 'Too slow'],
+  ['confusing', 'Confusing'],
+  ['too_much_text', 'Too much text'],
+  ['wanted_examples', 'Wanted examples'],
+]
+
 // what a text check found: the gaps, or that there weren't any
 const checkMessage = ({ passed, gaps }) => ({
   role: 'assistant',
   kind: 'text',
   content: passed ? 'Nice work, you covered it all.' : `Worth another look:\n${gaps.map((gap) => `- ${gap}`).join('\n')}`,
 })
+
+// a test is from memory, so everything before it stays hidden until the test is over
+const putAway = (messages) => messages.map((m, i) => (i === 0 ? m : { ...m, beforeTest: true }))
 
 const shortDate = (iso) => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 
@@ -30,16 +42,19 @@ function App() {
   const [status, setStatus] = useState(null) // what the tutor is doing right now ("Planning…"), null when idle
   const [pendingQuiz, setPendingQuiz] = useState(null) // { round, questions } held back until the student clicks to continue
   const [pendingCheck, setPendingCheck] = useState(null) // a text check's prompt, held back the same way
+  const [pendingDiscuss, setPendingDiscuss] = useState(null) // the chat's opening line, held back the same way
+  const [discussing, setDiscussing] = useState(false) // the chat after a lesson is open
+  const [feedback, setFeedback] = useState(null) // { liked, liked_reason } once a session is over, null until then
   const [sessions, setSessions] = useState([]) // past sessions for the sidebar
   const [sessionId, setSessionId] = useState(null) // the session on screen, null for a new lesson
   const [inDialogue, setInDialogue] = useState(false) // a Socratic dialogue is under way, so a message answers it
   const [confirmingDelete, setConfirmingDelete] = useState(null) // id of the sidebar row asking "Delete?"
-  const [page, setPage] = useState(0) // the lesson pager's page: 0 is the plan, 1..n are the steps
+  const [page, setPage] = useState(0) // the lesson pager's page: 0 is the hook, 1..n are the steps
   const [asking, setAsking] = useState(null) // { index, question } waiting for an answer
   const [askFailed, setAskFailed] = useState(null) // step index whose last question failed
   const shownSession = useRef(null) // sessionId without waiting for a render, for answers that arrive late
   const lessonShowing = useRef(false) // a check's first prompt has to wait until the student has read the lesson
-  const gradedThisRun = useRef(false) // an answer run that fails after grading leaves the graph stalled, not waiting
+  const gradedThisRun = useRef(false) // a run that fails after grading or starting a test leaves the graph stalled, not waiting
   const scrollRef = useRef(null)
   const textareaRef = useRef(null)
   const loading = status !== null
@@ -105,9 +120,17 @@ function App() {
       setStatus('Writing up the lessons…')
     } else if (event === 'lessons') {
       addLessons(data.lessons)
-      setStatus('Generating questions…')
+    } else if (event === 'discuss') {
+      if (lessonShowing.current) setPendingDiscuss(data.text)
+      else addMessage({ role: 'assistant', kind: 'text', content: data.text })
+    } else if (event === 'discuss_end') {
+      leaveDiscussion(data.next)
+      addMessage({ role: 'assistant', kind: 'text', content: data.text })
+      if (data.next === 'test') setStatus('Generating questions…')
     } else if (event === 'quiz') {
-      setPendingQuiz(data) // don't show yet: the last lesson or reteach page has a button that reveals it
+      // the student asked for round 1; later rounds wait for the button on the last reteach page
+      if (data.round === 1) revealQuiz(data)
+      else setPendingQuiz(data)
     } else if (event === 'grade') {
       gradedThisRun.current = true
       setMessages((prev) => prev.map((m) => (m.kind === 'review' && m.round === data.round ? { ...m, grade: data } : m)))
@@ -117,7 +140,6 @@ function App() {
     } else if (event === 'analogy') {
       lessonShowing.current = true
       addMessage({ role: 'assistant', kind: 'analogy', lesson: data })
-      setStatus('Getting your questions ready…')
     } else if (event === 'question') {
       if (lessonShowing.current) {
         setPendingCheck(data.question)
@@ -133,6 +155,8 @@ function App() {
       if (data.check_type !== 'quiz') addMessage(checkMessage(data)) // a quiz shows its own results
     } else if (event === 'reexplain') {
       addMessage({ role: 'assistant', kind: 'text', content: data.text })
+    } else if (event === 'finished') {
+      setFeedback({ liked: null, liked_reason: null })
     } else if (event === 'error') {
       // after grading, the graph is stuck between nodes and needs a resume, not new answers
       addMessage({ role: 'assistant', kind: 'text', content: ERROR_TEXT, error: true, retry: gradedThisRun.current })
@@ -165,14 +189,33 @@ function App() {
   }
 
   const lesson = messages.find((m) => m.kind === 'lesson')
-  const quizShowing = messages.some((m) => m.kind === 'review' || m.kind === 'reteach')
+  const testing =
+    messages.some((m) => m.beforeTest) &&
+    (loading ||
+      inDialogue ||
+      pendingQuiz !== null ||
+      pendingCheck !== null ||
+      messages.some((m) => m.retry || (m.kind === 'review' && !m.grade)))
   // with a finished lesson on screen, the composer asks about the step being read
-  const askMode = Boolean(sessionId && lesson?.lessons && !quizShowing)
+  const askMode = Boolean(sessionId && lesson?.lessons && !testing && !inDialogue)
 
   const clearPending = () => {
     setPendingQuiz(null)
     setPendingCheck(null)
+    setPendingDiscuss(null)
+    setDiscussing(false)
+    setFeedback(null)
     lessonShowing.current = false
+  }
+
+  const rate = async (liked, reason = null) => {
+    const previous = feedback
+    setFeedback({ liked, liked_reason: reason })
+    try {
+      await sendFeedback(sessionId, liked, reason)
+    } catch {
+      setFeedback(previous)
+    }
   }
 
   const send = async () => {
@@ -241,7 +284,7 @@ function App() {
     }
   }
 
-  // rebuild a saved session: the lesson until the first quiz is answered, then every graded round and reteach
+  // rebuild a saved session: the lesson and its chat, then every graded round and reteach or the text check
   const openSession = async (id) => {
     if (loading || id === sessionId) return
     showSession(id)
@@ -249,7 +292,8 @@ function App() {
     setInDialogue(false)
     try {
       const saved = await getSession(id)
-      const rebuilt = [{ role: 'user', kind: 'text', content: saved.prompt }]
+      if (saved.episode && !saved.in_progress) setFeedback(saved.episode)
+      let rebuilt = [{ role: 'user', kind: 'text', content: saved.prompt }]
       const addTurns = (turns) => {
         for (const turn of turns) {
           rebuilt.push({ role: turn.role === 'student' ? 'user' : 'assistant', kind: 'text', content: turn.text })
@@ -266,12 +310,21 @@ function App() {
       // a text check that hasn't been answered yet waits behind the lesson, as it did the first time
       const checkHeld = saved.in_progress && saved.check_turns.length === 1
       const checkStarted = saved.check_turns.length > 0 && !checkHeld
-      if (!saved.rounds.length && !checkStarted) {
-        if (saved.analogy_bridging) {
-          rebuilt.push({ role: 'assistant', kind: 'analogy', lesson: saved.analogy_bridging })
-        } else if (saved.plan) {
-          rebuilt.push({ role: 'assistant', kind: 'lesson', plan: saved.plan, lessons: saved.lessons, followups: saved.followups })
-        }
+      const tested = saved.rounds.length > 0 || checkStarted
+      if (saved.analogy_bridging) {
+        rebuilt.push({ role: 'assistant', kind: 'analogy', lesson: saved.analogy_bridging })
+      } else if (saved.plan) {
+        rebuilt.push({ role: 'assistant', kind: 'lesson', plan: saved.plan, lessons: saved.lessons, followups: saved.followups })
+      }
+      // a first test that's waiting goes behind the button on the lesson, which has to stay the last thing on screen
+      if (tested || (!saved.waiting && !checkHeld)) addTurns(saved.discuss)
+      if (tested) rebuilt = putAway(rebuilt)
+      if (saved.discussing && !saved.discuss.length) {
+        setPendingDiscuss(saved.discussing)
+        lessonShowing.current = true
+      } else if (saved.discussing) {
+        setDiscussing(true)
+        setInDialogue(true)
       }
       if (checkHeld) {
         setPendingCheck(saved.check_turns[0].text)
@@ -304,45 +357,69 @@ function App() {
     }
   }
 
-  // show the waiting quiz: the first one replaces the lesson, later rounds go below the reteach that led to them
-  const showQuestions = () => {
-    const quiz = { role: 'assistant', kind: 'review', round: pendingQuiz.round, questions: pendingQuiz.questions, grade: null }
-    setMessages((prev) => {
-      if (!['lesson', 'analogy'].includes(prev.at(-1)?.kind)) return [...prev, quiz]
-      const lastUser = prev.findLastIndex((m) => m.role === 'user')
-      return [...prev.slice(0, lastUser + 1), quiz]
-    })
+  // show a quiz: the first one puts the lesson away, later rounds go below the reteach that led to them
+  const revealQuiz = ({ round, questions }) => {
+    const quiz = { role: 'assistant', kind: 'review', round, questions, grade: null }
+    setMessages((prev) => [...(round === 1 ? putAway(prev) : prev), quiz])
     setPendingQuiz(null)
   }
 
-  // show the waiting text check; it replaces the lesson, so retrieval practice really is from memory
+  const showQuestions = () => revealQuiz(pendingQuiz)
+
+  // show the waiting text check; it puts the lesson away, so retrieval practice really is from memory
   const showCheck = () => {
-    setMessages((prev) => {
-      const lastUser = prev.findLastIndex((m) => m.role === 'user')
-      return [...prev.slice(0, lastUser + 1), { role: 'assistant', kind: 'text', content: pendingCheck }]
-    })
+    setMessages((prev) => [...putAway(prev), { role: 'assistant', kind: 'text', content: pendingCheck }])
     setPendingCheck(null)
     lessonShowing.current = false
     setInDialogue(true)
   }
 
-  const checkReady = pendingQuiz !== null || pendingCheck !== null
-  const continueToCheck = pendingQuiz ? showQuestions : showCheck
+  // the lesson stays on screen for the chat, and the composer talks to it from here on
+  const showDiscussion = () => {
+    addMessage({ role: 'assistant', kind: 'text', content: pendingDiscuss })
+    setPendingDiscuss(null)
+    lessonShowing.current = false
+    setDiscussing(true)
+    setInDialogue(true)
+  }
+
+  const leaveDiscussion = (next) => {
+    setDiscussing(false)
+    setInDialogue(false)
+    if (next === 'test') {
+      gradedThisRun.current = true // a test that fails to start needs a resume, not a new message
+      setMessages(putAway)
+    }
+  }
+
+  const endChat = (choice) => {
+    if (loading) return
+    const startStatus = choice === 'test' ? 'Generating questions…' : 'Wrapping up…'
+    runAnswers((onEv) => {
+      leaveDiscussion(choice)
+      return endDiscussion(sessionId, choice, onEv)
+    }, startStatus)
+  }
+
+  const checkReady = pendingQuiz !== null || pendingCheck !== null || pendingDiscuss !== null
+  const continueToCheck = pendingDiscuss !== null ? showDiscussion : pendingQuiz ? showQuestions : showCheck
 
   const quizzes = messages.filter((m) => m.kind === 'review')
   // finished: the last thing on screen is a graded quiz and nothing else is coming
   const finished = !loading && !pendingQuiz && messages.at(-1)?.kind === 'review' && messages.at(-1).grade
 
   const onPlanPage = askMode && page === 0
-  const cantSend = loading || !draft.trim() || onPlanPage || quizShowing || asking !== null
+  const cantSend = loading || !draft.trim() || onPlanPage || testing || asking !== null
   const placeholder = loading
     ? 'Type a message'
+    : discussing
+      ? 'Ask anything about this lesson…'
     : inDialogue
       ? 'Type your answer'
-    : quizShowing
-      ? 'Quiz time. Use + New lesson to learn something else'
+    : testing
+      ? 'Test in progress…'
       : onPlanPage
-        ? 'Click Next to start, then ask about any step'
+        ? 'Go to a step to ask about it'
         : askMode
           ? `Ask about step ${page}…`
           : 'What would you like to learn?'
@@ -394,7 +471,7 @@ function App() {
               )}
 
               {messages.map((m, i) =>
-                m.kind === 'lesson' ? (
+                m.beforeTest && testing ? null : m.kind === 'lesson' ? (
                   <Lesson
                     key={`${sessionId}-${i}`} // a different session gets a fresh pager instead of keeping the old page
                     plan={m.plan}
@@ -404,15 +481,17 @@ function App() {
                     setPage={setPage}
                     asking={asking}
                     askFailed={askFailed}
-                    // only the newest lesson can move on to the questions that just came back
-                    questionsReady={i === messages.length - 1 && checkReady}
+                    // only the newest lesson can move on; nothing's coming once a session is over
+                    showContinue={i === messages.length - 1 && (checkReady || loading)}
+                    questionsReady={checkReady}
                     onContinue={continueToCheck}
                   />
                 ) : m.kind === 'analogy' ? (
                   <Analogy
                     key={`${sessionId}-${i}`}
                     lesson={m.lesson}
-                    questionsReady={i === messages.length - 1 && checkReady}
+                    showContinue={i === messages.length - 1 && (checkReady || loading)}
+                    questionsReady={checkReady}
                     onContinue={continueToCheck}
                   />
                 ) : m.kind === 'review' ? (
@@ -438,11 +517,23 @@ function App() {
 
               {finished && <Summary quizzes={quizzes} />}
 
+              {feedback && !loading && !testing && <Feedback feedback={feedback} onRate={rate} />}
+
               {status && <div className="thinking">{status}</div>}
             </div>
           </main>
 
           <div className="composer-wrap">
+            {discussing && (
+              <div className="discuss-actions">
+                <button onClick={() => endChat('test')} disabled={loading}>
+                  Test me
+                </button>
+                <button onClick={() => endChat('finish')} disabled={loading}>
+                  I'm done
+                </button>
+              </div>
+            )}
             <div className="composer">
               <textarea
                 ref={textareaRef}
@@ -493,7 +584,7 @@ function Progress({ count, current }) {
 
 // the plan, then each lesson step, one page at a time with Back / Next;
 // the last step's button moves on to the questions
-function Lesson({ plan, lessons, followups, page, setPage, asking, askFailed, questionsReady, onContinue }) {
+function Lesson({ plan, lessons, followups, page, setPage, asking, askFailed, showContinue, questionsReady, onContinue }) {
   const pages = plan.steps.length + 1
   const isLast = page === pages - 1
   const lesson = page > 0 && lessons ? lessons[page - 1] : null
@@ -501,19 +592,12 @@ function Lesson({ plan, lessons, followups, page, setPage, asking, askFailed, qu
   return (
     <div className="msg msg-tutor pager">
       <div className="pager-top">
-        <span className="pager-count">{page === 0 ? 'The plan' : `Step ${page} of ${plan.steps.length}`}</span>
+        <span className="pager-count">{page === 0 ? 'Before we start' : `Step ${page} of ${plan.steps.length}`}</span>
         <Progress count={pages} current={page} />
       </div>
 
       {page === 0 ? (
-        <div>
-          Here's how we'll learn {plan.concept_to_teach}:
-          <ol className="plan-steps">
-            {plan.steps.map((step) => (
-              <li key={step}>{step}</li>
-            ))}
-          </ol>
-        </div>
+        <div>{plan.hook || `Let's learn ${plan.concept_to_teach}.`}</div>
       ) : (
         <div>
           <div className="lesson-title">{lesson.step}</div>
@@ -533,9 +617,11 @@ function Lesson({ plan, lessons, followups, page, setPage, asking, askFailed, qu
           ← Back
         </button>
         {isLast ? (
-          <button className="pager-next" onClick={onContinue} disabled={!questionsReady}>
-            Continue to questions →
-          </button>
+          showContinue && (
+            <button className="pager-next" onClick={onContinue} disabled={!questionsReady}>
+              Continue →
+            </button>
+          )
         ) : (
           // the steps aren't readable until the lessons arrive
           <button className="pager-next" onClick={() => setPage(page + 1)} disabled={!lessons}>
@@ -548,7 +634,7 @@ function Lesson({ plan, lessons, followups, page, setPage, asking, askFailed, qu
 }
 
 // an analogy lesson: the explanation, what maps to what, and where the comparison stops working
-function Analogy({ lesson, questionsReady, onContinue }) {
+function Analogy({ lesson, showContinue, questionsReady, onContinue }) {
   return (
     <div className="msg msg-tutor pager">
       <div className="lesson-title">Think of it like {lesson.analogy}</div>
@@ -560,11 +646,13 @@ function Analogy({ lesson, questionsReady, onContinue }) {
       </ul>
       <div className="lesson-title">Where the analogy breaks down</div>
       {lesson.limits}
-      <div className="pager-nav">
-        <button className="pager-next" onClick={onContinue} disabled={!questionsReady}>
-          Continue to questions →
-        </button>
-      </div>
+      {showContinue && (
+        <div className="pager-nav">
+          <button className="pager-next" onClick={onContinue} disabled={!questionsReady}>
+            Continue →
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -719,6 +807,38 @@ function Reteach({ steps, questionsReady, onContinue }) {
           </button>
         )}
       </div>
+    </div>
+  )
+}
+
+// end of a session: thumbs up or down, and the optional reason tags after a thumbs down
+function Feedback({ feedback, onRate }) {
+  const { liked, liked_reason: reason } = feedback
+
+  return (
+    <div className="msg msg-tutor feedback">
+      {liked === null && (
+        <>
+          <span>How did this lesson go?</span>
+          <button onClick={() => onRate(true)} aria-label="Thumbs up">
+            👍
+          </button>
+          <button onClick={() => onRate(false)} aria-label="Thumbs down">
+            👎
+          </button>
+        </>
+      )}
+      {liked === true && <span>Thanks!</span>}
+      {liked === false && (
+        <>
+          <span>What got in the way?</span>
+          {FEEDBACK_REASONS.map(([value, label]) => (
+            <button key={value} className={reason === value ? 'on' : ''} onClick={() => onRate(false, value)}>
+              {label}
+            </button>
+          ))}
+        </>
+      )}
     </div>
   )
 }

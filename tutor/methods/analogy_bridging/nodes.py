@@ -33,4 +33,5 @@ def reexplain_node(state: TutorState) -> dict:
 
 
 def finish_node(state: TutorState) -> dict:
-    return {"outcome": "completed" if state["check_result"].passed else "stuck"}
+    check = state.get("check_result")  # missing when the student skipped the test
+    return {"outcome": "stuck" if check and not check.passed else "completed"}

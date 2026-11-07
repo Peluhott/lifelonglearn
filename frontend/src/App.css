@@ -538,6 +538,53 @@
   flex: none;
 }
 
+.feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.feedback button {
+  font: 600 14px var(--font-body);
+  padding: 6px 12px;
+  border: 1px solid var(--input-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.feedback button.on {
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.discuss-actions {
+  max-width: 720px;
+  margin: 0 auto 10px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.discuss-actions button {
+  font: 600 14px var(--font-body);
+  padding: 8px 14px;
+  border: 1px solid var(--input-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.discuss-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .composer {
   max-width: 720px;
   margin: 0 auto;

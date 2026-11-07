@@ -31,6 +31,9 @@ class IntakeResult(BaseModel):
     subject: Optional[str] = Field(
         None, description="Broad subject, e.g. 'Calculus I', 'Operating Systems'."
     )
+    category: Literal[
+        "math", "science", "computer_science", "history", "language", "arts_humanities", "business", "other"
+    ] = Field(default="other", description="The broad area this falls under.")
     target_concept: Optional[str] = Field(
         None, description="The main concept they need help with, e.g. 'chain rule'."
     )
@@ -70,6 +73,11 @@ class PlannerResult(BaseModel):
     #for understanding
 
     concept_to_teach: str = Field(description="The main concept that the planner agent has decided to teach.")
+
+    hook: str = Field(
+        default="",  # sessions saved before hooks existed don't have one
+        description="One or two sentences that make the student excited to learn this concept.",
+    )
 
     steps: list[str] = Field(
         default_factory=list,
@@ -150,6 +158,7 @@ class SelectMethodResult(BaseModel):
     ] = Field(
         description="The underlying type of request, even when the student names a teaching style."
     )
+    student_asked: bool = Field(default=False, description="True only if the student named a teaching style.")
     reason: str = Field(description="One line explaining the choice.")
 
 # ---------------------------------------------------------------------------
@@ -218,6 +227,50 @@ class FollowUp(BaseModel):
     index: int = Field(description="Position of the step it was asked about (0-based).")
     question: str
     answer: str
+
+
+class Rating(BaseModel):
+    """One rubric criterion, judged after a session has finished."""
+
+    level: Literal["none", "weak", "good", "full"]
+    evidence: str = Field(description="A short quote of the student's words behind this rating, empty if there is none.")
+
+
+class SocraticRubric(BaseModel):
+    """How the student did in a Socratic dialogue."""
+
+    reached_idea: Rating
+    own_reasoning: Rating
+
+
+class FadedRubric(BaseModel):
+    """How the student did in a worked-faded session."""
+
+    later_problems: Rating
+    reasoning: Rating
+
+
+class RecallRubric(BaseModel):
+    """How the student did explaining a concept in their own words."""
+
+    accuracy: Rating
+    coverage: Rating
+
+
+class ErrorRubric(BaseModel):
+    """How the student did finding a planted mistake."""
+
+    found_mistake: Rating
+    fixed_mistake: Rating
+
+
+class DiscussReply(BaseModel):
+    """The tutor's reply in the chat after a lesson, and what happens next."""
+
+    text: str = Field(description="The reply to the student's latest message.")
+    next: Literal["continue", "test", "finish"] = Field(
+        description="continue the chat, test the student because they asked or agreed, or finish because they're done."
+    )
 
 # ---------------------------------------------------------------------------
 # Reviewer -> Grader -> Reteacher -> Grader ...   (the quiz rounds)
