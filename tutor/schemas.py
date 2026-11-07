@@ -71,6 +71,11 @@ class PlannerResult(BaseModel):
 
     concept_to_teach: str = Field(description="The main concept that the planner agent has decided to teach.")
 
+    hook: str = Field(
+        default="",  # sessions saved before hooks existed don't have one
+        description="One or two sentences that make the student excited to learn this concept.",
+    )
+
     steps: list[str] = Field(
         default_factory=list,
         description="The steps that the planner agent has decided to teach the concept in."

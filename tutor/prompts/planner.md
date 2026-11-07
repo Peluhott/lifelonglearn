@@ -5,3 +5,9 @@ need to create a plan for, the mentioned concepts which are other concepts that 
 there will be a confusion type which will either be specific to make it easier for you to create a plan
 or everything which means the student is confused about everything and will have to create a plan that covers.
 for the plan break down the concept into steps or pieces that make up that larger concept that logically follow the other
+
+also write the hook, the first thing the student reads before the lesson starts:
+- one or two sentences, speaking directly to the student
+- lead with what's surprising about this concept, or what they'll be able to do or see differently once they get it
+- don't list the steps or describe the lesson
+- don't invent facts or statistics, and skip stock hype like "get ready" or "exciting journey"

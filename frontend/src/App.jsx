@@ -34,7 +34,7 @@ function App() {
   const [sessionId, setSessionId] = useState(null) // the session on screen, null for a new lesson
   const [inDialogue, setInDialogue] = useState(false) // a Socratic dialogue is under way, so a message answers it
   const [confirmingDelete, setConfirmingDelete] = useState(null) // id of the sidebar row asking "Delete?"
-  const [page, setPage] = useState(0) // the lesson pager's page: 0 is the plan, 1..n are the steps
+  const [page, setPage] = useState(0) // the lesson pager's page: 0 is the hook, 1..n are the steps
   const [asking, setAsking] = useState(null) // { index, question } waiting for an answer
   const [askFailed, setAskFailed] = useState(null) // step index whose last question failed
   const shownSession = useRef(null) // sessionId without waiting for a render, for answers that arrive late
@@ -501,19 +501,12 @@ function Lesson({ plan, lessons, followups, page, setPage, asking, askFailed, qu
   return (
     <div className="msg msg-tutor pager">
       <div className="pager-top">
-        <span className="pager-count">{page === 0 ? 'The plan' : `Step ${page} of ${plan.steps.length}`}</span>
+        <span className="pager-count">{page === 0 ? 'Before we start' : `Step ${page} of ${plan.steps.length}`}</span>
         <Progress count={pages} current={page} />
       </div>
 
       {page === 0 ? (
-        <div>
-          Here's how we'll learn {plan.concept_to_teach}:
-          <ol className="plan-steps">
-            {plan.steps.map((step) => (
-              <li key={step}>{step}</li>
-            ))}
-          </ol>
-        </div>
+        <div>{plan.hook || `Let's learn ${plan.concept_to_teach}.`}</div>
       ) : (
         <div>
           <div className="lesson-title">{lesson.step}</div>
