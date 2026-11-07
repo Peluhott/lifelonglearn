@@ -23,6 +23,8 @@ class TutorState(TypedDict, total=False):
     reviewer: ReviewerResult  # the questions the reviewer agent wrote, one per taught step
     socratic: Annotated[list[DialogueTurn], operator.add]  # the dialogue, shared so a finished session can reopen
     outcome: str              # "completed" or "stuck", set by whichever method ran
+    discuss: Annotated[list[DialogueTurn], operator.add]  # the chat after a lesson, so it can reopen
+    discuss_next: str         # how the chat left things: "continue", "test" or "finish"
     pick_check: PickCheckResult  # which understanding check runs and why
     check_result: CheckResult    # whether the student passed, and the gaps
     check_turns: Annotated[list[DialogueTurn], operator.add]  # prompts and answers of a text check, so it can reopen
@@ -46,6 +48,17 @@ class CheckOutput(TypedDict, total=False):
 class CheckState(TutorState, total=False):
     """TutorState plus what the text checks keep to themselves."""
     last_answer: str
+
+
+class DiscussOutput(TypedDict, total=False):
+    """All the discussion hands back to its method, for the same reason as CheckOutput."""
+    discuss: Annotated[list[DialogueTurn], operator.add]
+    discuss_next: str
+
+
+class DiscussState(TutorState, total=False):
+    """TutorState plus what the discussion keeps to itself."""
+    last_message: str
 
 
 class TeacherTask(TypedDict):

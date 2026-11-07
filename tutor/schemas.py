@@ -224,6 +224,15 @@ class FollowUp(BaseModel):
     question: str
     answer: str
 
+
+class DiscussReply(BaseModel):
+    """The tutor's reply in the chat after a lesson, and what happens next."""
+
+    text: str = Field(description="The reply to the student's latest message.")
+    next: Literal["continue", "test", "finish"] = Field(
+        description="continue the chat, test the student because they asked or agreed, or finish because they're done."
+    )
+
 # ---------------------------------------------------------------------------
 # Reviewer -> Grader -> Reteacher -> Grader ...   (the quiz rounds)
 # ---------------------------------------------------------------------------

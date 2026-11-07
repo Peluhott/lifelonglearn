@@ -4,6 +4,7 @@ import {
   API_URL,
   askAboutStep,
   deleteSession,
+  endDiscussion,
   getSession,
   listSessions,
   resumeSession,
@@ -30,6 +31,8 @@ function App() {
   const [status, setStatus] = useState(null) // what the tutor is doing right now ("Planning…"), null when idle
   const [pendingQuiz, setPendingQuiz] = useState(null) // { round, questions } held back until the student clicks to continue
   const [pendingCheck, setPendingCheck] = useState(null) // a text check's prompt, held back the same way
+  const [pendingDiscuss, setPendingDiscuss] = useState(null) // the chat's opening line, held back the same way
+  const [discussing, setDiscussing] = useState(false) // the chat after a lesson is open
   const [sessions, setSessions] = useState([]) // past sessions for the sidebar
   const [sessionId, setSessionId] = useState(null) // the session on screen, null for a new lesson
   const [inDialogue, setInDialogue] = useState(false) // a Socratic dialogue is under way, so a message answers it
@@ -39,7 +42,7 @@ function App() {
   const [askFailed, setAskFailed] = useState(null) // step index whose last question failed
   const shownSession = useRef(null) // sessionId without waiting for a render, for answers that arrive late
   const lessonShowing = useRef(false) // a check's first prompt has to wait until the student has read the lesson
-  const gradedThisRun = useRef(false) // an answer run that fails after grading leaves the graph stalled, not waiting
+  const gradedThisRun = useRef(false) // a run that fails after grading or starting a test leaves the graph stalled, not waiting
   const scrollRef = useRef(null)
   const textareaRef = useRef(null)
   const loading = status !== null
@@ -105,9 +108,17 @@ function App() {
       setStatus('Writing up the lessons…')
     } else if (event === 'lessons') {
       addLessons(data.lessons)
-      setStatus('Generating questions…')
+    } else if (event === 'discuss') {
+      if (lessonShowing.current) setPendingDiscuss(data.text)
+      else addMessage({ role: 'assistant', kind: 'text', content: data.text })
+    } else if (event === 'discuss_end') {
+      leaveDiscussion(data.next)
+      addMessage({ role: 'assistant', kind: 'text', content: data.text })
+      if (data.next === 'test') setStatus('Generating questions…')
     } else if (event === 'quiz') {
-      setPendingQuiz(data) // don't show yet: the last lesson or reteach page has a button that reveals it
+      // the student asked for round 1; later rounds wait for the button on the last reteach page
+      if (data.round === 1) revealQuiz(data)
+      else setPendingQuiz(data)
     } else if (event === 'grade') {
       gradedThisRun.current = true
       setMessages((prev) => prev.map((m) => (m.kind === 'review' && m.round === data.round ? { ...m, grade: data } : m)))
@@ -117,7 +128,6 @@ function App() {
     } else if (event === 'analogy') {
       lessonShowing.current = true
       addMessage({ role: 'assistant', kind: 'analogy', lesson: data })
-      setStatus('Getting your questions ready…')
     } else if (event === 'question') {
       if (lessonShowing.current) {
         setPendingCheck(data.question)
@@ -167,11 +177,13 @@ function App() {
   const lesson = messages.find((m) => m.kind === 'lesson')
   const quizShowing = messages.some((m) => m.kind === 'review' || m.kind === 'reteach')
   // with a finished lesson on screen, the composer asks about the step being read
-  const askMode = Boolean(sessionId && lesson?.lessons && !quizShowing)
+  const askMode = Boolean(sessionId && lesson?.lessons && !quizShowing && !inDialogue)
 
   const clearPending = () => {
     setPendingQuiz(null)
     setPendingCheck(null)
+    setPendingDiscuss(null)
+    setDiscussing(false)
     lessonShowing.current = false
   }
 
@@ -272,6 +284,15 @@ function App() {
         } else if (saved.plan) {
           rebuilt.push({ role: 'assistant', kind: 'lesson', plan: saved.plan, lessons: saved.lessons, followups: saved.followups })
         }
+        // a test that's waiting goes behind the button on the lesson, which has to stay the last thing on screen
+        if (!saved.waiting && !checkHeld) addTurns(saved.discuss)
+      }
+      if (saved.discussing && !saved.discuss.length) {
+        setPendingDiscuss(saved.discussing)
+        lessonShowing.current = true
+      } else if (saved.discussing) {
+        setDiscussing(true)
+        setInDialogue(true)
       }
       if (checkHeld) {
         setPendingCheck(saved.check_turns[0].text)
@@ -304,30 +325,52 @@ function App() {
     }
   }
 
-  // show the waiting quiz: the first one replaces the lesson, later rounds go below the reteach that led to them
-  const showQuestions = () => {
-    const quiz = { role: 'assistant', kind: 'review', round: pendingQuiz.round, questions: pendingQuiz.questions, grade: null }
-    setMessages((prev) => {
-      if (!['lesson', 'analogy'].includes(prev.at(-1)?.kind)) return [...prev, quiz]
-      const lastUser = prev.findLastIndex((m) => m.role === 'user')
-      return [...prev.slice(0, lastUser + 1), quiz]
-    })
+  // show a quiz: the first one replaces the lesson, later rounds go below the reteach that led to them
+  const revealQuiz = ({ round, questions }) => {
+    const quiz = { role: 'assistant', kind: 'review', round, questions, grade: null }
+    setMessages((prev) => (prev.some((m) => ['lesson', 'analogy'].includes(m.kind)) ? [prev[0], quiz] : [...prev, quiz]))
     setPendingQuiz(null)
   }
 
+  const showQuestions = () => revealQuiz(pendingQuiz)
+
   // show the waiting text check; it replaces the lesson, so retrieval practice really is from memory
   const showCheck = () => {
-    setMessages((prev) => {
-      const lastUser = prev.findLastIndex((m) => m.role === 'user')
-      return [...prev.slice(0, lastUser + 1), { role: 'assistant', kind: 'text', content: pendingCheck }]
-    })
+    setMessages((prev) => [prev[0], { role: 'assistant', kind: 'text', content: pendingCheck }])
     setPendingCheck(null)
     lessonShowing.current = false
     setInDialogue(true)
   }
 
-  const checkReady = pendingQuiz !== null || pendingCheck !== null
-  const continueToCheck = pendingQuiz ? showQuestions : showCheck
+  // the lesson stays on screen for the chat, and the composer talks to it from here on
+  const showDiscussion = () => {
+    addMessage({ role: 'assistant', kind: 'text', content: pendingDiscuss })
+    setPendingDiscuss(null)
+    lessonShowing.current = false
+    setDiscussing(true)
+    setInDialogue(true)
+  }
+
+  const leaveDiscussion = (next) => {
+    setDiscussing(false)
+    setInDialogue(false)
+    if (next === 'test') {
+      gradedThisRun.current = true // a test that fails to start needs a resume, not a new message
+      setMessages((prev) => prev.slice(0, 1)) // the test is from memory, so the lesson and chat leave the screen
+    }
+  }
+
+  const endChat = (choice) => {
+    if (loading) return
+    const startStatus = choice === 'test' ? 'Generating questions…' : 'Wrapping up…'
+    runAnswers((onEv) => {
+      leaveDiscussion(choice)
+      return endDiscussion(sessionId, choice, onEv)
+    }, startStatus)
+  }
+
+  const checkReady = pendingQuiz !== null || pendingCheck !== null || pendingDiscuss !== null
+  const continueToCheck = pendingDiscuss !== null ? showDiscussion : pendingQuiz ? showQuestions : showCheck
 
   const quizzes = messages.filter((m) => m.kind === 'review')
   // finished: the last thing on screen is a graded quiz and nothing else is coming
@@ -337,6 +380,8 @@ function App() {
   const cantSend = loading || !draft.trim() || onPlanPage || quizShowing || asking !== null
   const placeholder = loading
     ? 'Type a message'
+    : discussing
+      ? 'Ask anything about this lesson…'
     : inDialogue
       ? 'Type your answer'
     : quizShowing
@@ -443,6 +488,16 @@ function App() {
           </main>
 
           <div className="composer-wrap">
+            {discussing && (
+              <div className="discuss-actions">
+                <button onClick={() => endChat('test')} disabled={loading}>
+                  Test me
+                </button>
+                <button onClick={() => endChat('finish')} disabled={loading}>
+                  I'm done
+                </button>
+              </div>
+            )}
             <div className="composer">
               <textarea
                 ref={textareaRef}
@@ -527,7 +582,7 @@ function Lesson({ plan, lessons, followups, page, setPage, asking, askFailed, qu
         </button>
         {isLast ? (
           <button className="pager-next" onClick={onContinue} disabled={!questionsReady}>
-            Continue to questions →
+            Continue →
           </button>
         ) : (
           // the steps aren't readable until the lessons arrive
@@ -555,7 +610,7 @@ function Analogy({ lesson, questionsReady, onContinue }) {
       {lesson.limits}
       <div className="pager-nav">
         <button className="pager-next" onClick={onContinue} disabled={!questionsReady}>
-          Continue to questions →
+          Continue →
         </button>
       </div>
     </div>

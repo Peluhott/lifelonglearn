@@ -1,6 +1,7 @@
 import json
 import uuid
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -57,6 +58,12 @@ class AnswersRequest(BaseModel):
     """The student's pick for each question of the quiz the session is waiting on, in order."""
 
     answers: list[str]
+
+
+class DiscussionRequest(BaseModel):
+    """How the student ended the chat after a lesson, from the Test me and I'm done buttons."""
+
+    choice: Literal["test", "finish"]
 
 
 class AskRequest(BaseModel):
@@ -116,13 +123,21 @@ def waiting_quiz(snapshot) -> dict | None:
     return None
 
 
+def waiting_discussion(snapshot) -> str | None:
+    """The tutor's latest line if the session is paused on the chat after a lesson."""
+    if snapshot.interrupts and "discuss" in snapshot.interrupts[0].value:
+        return snapshot.interrupts[0].value["question"]
+    return None
+
+
 def events(graph, sessions, session_id: uuid.UUID, graph_input, first_run: bool):
     """Run (or resume) the graph and yield SSE frames until it finishes or pauses for the student.
 
-    First run: session, intake, then what the method teaches (plan and lessons, or analogy) and the check that
-    follows it (quiz or question), or a dialogue's first question. Answer runs: grade, then reteach + the next quiz if
-    anything was missed; or the next question. A check ends with check_result, then reexplain if an analogy lesson
-    found gaps; a dialogue ends with wrap_up. Every stream ends with done (or error).
+    First run: session, intake, then what the method teaches (plan and lessons, or analogy) and the chat about it
+    (discuss), or a dialogue's first question. The chat sends discuss for each reply and discuss_end if a typed message
+    ended it; a test then sends quiz or question. Answer runs: grade, then reteach + the next quiz if anything was
+    missed; or the next question. A check ends with check_result, then reexplain if an analogy lesson found gaps; a
+    dialogue ends with wrap_up. Every stream ends with done (or error).
     """
     if first_run:
         yield sse("session", {"id": str(session_id)})
@@ -143,8 +158,11 @@ def events(graph, sessions, session_id: uuid.UUID, graph_input, first_run: bool)
                     retaught = []
                 if node == "__interrupt__":
                     if not namespace:  # a nested interrupt is reported once per graph level
-                        pause = output[0].value  # the grader's {round, questions} or a Socratic {question}
-                        yield sse("quiz" if "questions" in pause else "question", pause)
+                        pause = output[0].value  # the grader's {round, questions}, or a {question} to answer
+                        if "discuss" in pause:
+                            yield sse("discuss", {"text": pause["question"]})
+                        else:
+                            yield sse("quiz" if "questions" in pause else "question", pause)
                 elif node == "intake":
                     intake = output["intake"]
                     if intake.target_concept:
@@ -156,6 +174,9 @@ def events(graph, sessions, session_id: uuid.UUID, graph_input, first_run: bool)
                 elif node == "select_method":
                     if output["select_method"].chosen_method == "structured_lesson":  # only lessons show the plan
                         yield sse("plan", plan.model_dump())
+                elif node == "discuss_reply":
+                    if output["discuss_next"] != "continue":  # a "continue" reply is sent by the pause that follows it
+                        yield sse("discuss_end", {"text": output["discuss"][0].text, "next": output["discuss_next"]})
                 elif node == "wrap_up":
                     yield sse("wrap_up", {"text": output["socratic"][0].text, "outcome": output["outcome"]})
                 elif node == "faded_wrap_up":
@@ -220,6 +241,19 @@ def answer_question(session_id: uuid.UUID, req: AnswerRequest, request: Request)
     )
 
 
+@app.post("/sessions/{session_id}/discussion")
+def end_discussion(session_id: uuid.UUID, req: DiscussionRequest, request: Request) -> StreamingResponse:
+    """End the chat after a lesson with the student's choice; typed messages go through /answer."""
+    graph = request.app.state.graph
+    snapshot, _ = state_of(graph, session_id)
+    if waiting_discussion(snapshot) is None:
+        raise HTTPException(status_code=409, detail="This session isn't in a discussion")
+    return StreamingResponse(
+        events(graph, request.app.state.sessions, session_id, resume_with(snapshot, {"choice": req.choice}), first_run=False),
+        media_type="text/event-stream",
+    )
+
+
 @app.get("/sessions")
 def list_sessions(request: Request) -> list[dict]:
     """Past sessions for the sidebar, newest first."""
@@ -254,6 +288,8 @@ def get_session(session_id: uuid.UUID, request: Request) -> dict:
         "stalled": stalled(snapshot),
         "socratic": [turn.model_dump() for turn in values.get("socratic", [])],
         "worked_faded": [turn.model_dump() for turn in values.get("worked_faded", [])],
+        "discuss": [turn.model_dump() for turn in values.get("discuss", [])],
+        "discussing": waiting_discussion(snapshot),
         "check_turns": [turn.model_dump() for turn in values.get("check_turns", [])],
         "check_result": check_result.model_dump() if check_result else None,
         "analogy_bridging": analogy.model_dump() if analogy else None,
