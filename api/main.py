@@ -9,9 +9,11 @@ from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.types import Command
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from api import db
 from tutor.agents.followup import answer_followup
+from tutor.agents.judge import score_session, testing_method
 from tutor.graph import build_graph, live_snapshot, method_values
 from tutor.schemas import FollowUp, GraderResult, RetaughtStep, TaughtStep
 from tutor.tools.images import IMAGES_DIR
@@ -64,6 +66,13 @@ class DiscussionRequest(BaseModel):
     """How the student ended the chat after a lesson, from the Test me and I'm done buttons."""
 
     choice: Literal["test", "finish"]
+
+
+class FeedbackRequest(BaseModel):
+    """The student's thumbs up or down on a finished session, with an optional reason after a thumbs down."""
+
+    liked: bool
+    reason: Literal["too_slow", "confusing", "too_much_text", "wanted_examples"] | None = None
 
 
 class AskRequest(BaseModel):
@@ -137,7 +146,7 @@ def events(graph, sessions, session_id: uuid.UUID, graph_input, first_run: bool)
     (discuss), or a dialogue's first question. The chat sends discuss for each reply and discuss_end if a typed message
     ended it; a test then sends quiz or question. Answer runs: grade, then reteach + the next quiz if anything was
     missed; or the next question. A check ends with check_result, then reexplain if an analogy lesson found gaps; a
-    dialogue ends with wrap_up. Every stream ends with done (or error).
+    dialogue ends with wrap_up. A run that ends the session sends finished. Every stream ends with done (or error).
     """
     if first_run:
         yield sse("session", {"id": str(session_id)})
@@ -172,7 +181,16 @@ def events(graph, sessions, session_id: uuid.UUID, graph_input, first_run: bool)
                     plan = output["planner"]
                     total = len(plan.steps)  # remember how many steps so each lesson can say "2 of 5"
                 elif node == "select_method":
-                    if output["select_method"].chosen_method == "structured_lesson":  # only lessons show the plan
+                    selected = output["select_method"]
+                    sessions.start_episode(
+                        session_id,
+                        subject=intake.category,
+                        topic=intake.target_concept or plan.concept_to_teach,
+                        teaching_method=selected.chosen_method,
+                        request_type=selected.request_type,
+                        task_type=intake.task_type,
+                    )
+                    if selected.chosen_method == "structured_lesson":  # only lessons show the plan
                         yield sse("plan", plan.model_dump())
                 elif node == "discuss_reply":
                     if output["discuss_next"] != "continue":  # a "continue" reply is sent by the pause that follows it
@@ -200,15 +218,43 @@ def events(graph, sessions, session_id: uuid.UUID, graph_input, first_run: bool)
             yield sse("lessons", {"lessons": sorted(lessons, key=lambda l: l["index"])})
         if retaught:
             yield sse("reteach", reteach_payload(retaught))
+        if not state_of(graph, session_id)[0].next:
+            yield sse("finished", {})
         yield sse("done", {})
     except Exception as e:
         if first_run:
             # a failed first run isn't worth keeping in the sidebar; a failed answer run keeps its lesson
             sessions.delete(session_id)
+            sessions.delete_episode(session_id)
             if graph.checkpointer:
                 graph.checkpointer.delete_thread(str(session_id))
         # the 200 response has already started by now, so errors have to be sent inside the stream
         yield sse("error", {"message": str(e)})
+
+
+def finish_session(graph, sessions, session_id: uuid.UUID) -> None:
+    """Record how a finished session went. Runs after each response, so the judge never holds up the page."""
+    snapshot, values = state_of(graph, session_id)
+    if snapshot.next or not values:  # still paused or stalled, or a first run that failed
+        return
+    method = testing_method(values)
+    if not sessions.finish_episode(session_id, method, values.get("outcome")):
+        return  # already recorded, or from before episodes existed
+    try:
+        score = score_session(method, values)
+    except Exception as e:  # a failed judge shouldn't lose the rest of the record
+        print(f"Scoring session {session_id} failed: {e}")
+        return
+    if score:
+        sessions.set_score(session_id, **score)
+
+
+def stream_response(graph, sessions, session_id: uuid.UUID, graph_input, first_run: bool = False) -> StreamingResponse:
+    return StreamingResponse(
+        events(graph, sessions, session_id, graph_input, first_run),
+        media_type="text/event-stream",
+        background=BackgroundTask(finish_session, graph, sessions, session_id),
+    )
 
 
 @app.get("/health")
@@ -222,10 +268,8 @@ def tutor_stream(req: TutorRequest, request: Request) -> StreamingResponse:
     sessions = request.app.state.sessions
     sessions.create(session_id, req.prompt)
     # a regular (non-async) generator: FastAPI runs it in a worker thread, which suits the blocking Gemini calls
-    return StreamingResponse(
-        events(request.app.state.graph, sessions, session_id, {"user_prompt": req.prompt}, first_run=True),
-        media_type="text/event-stream",
-    )
+    graph_input = {"user_prompt": req.prompt, }
+    return stream_response(request.app.state.graph, sessions, session_id, graph_input, first_run=True)
 
 
 @app.post("/sessions/{session_id}/answer")
@@ -235,10 +279,7 @@ def answer_question(session_id: uuid.UUID, req: AnswerRequest, request: Request)
     snapshot, _ = state_of(graph, session_id)
     if not snapshot.next or waiting_quiz(snapshot):  # a quiz wants one pick per question, so text must not reach it
         raise HTTPException(status_code=409, detail="This session isn't waiting for an answer")
-    return StreamingResponse(
-        events(graph, request.app.state.sessions, session_id, resume_with(snapshot, req.answer), first_run=False),
-        media_type="text/event-stream",
-    )
+    return stream_response(graph, request.app.state.sessions, session_id, resume_with(snapshot, req.answer))
 
 
 @app.post("/sessions/{session_id}/discussion")
@@ -248,10 +289,7 @@ def end_discussion(session_id: uuid.UUID, req: DiscussionRequest, request: Reque
     snapshot, _ = state_of(graph, session_id)
     if waiting_discussion(snapshot) is None:
         raise HTTPException(status_code=409, detail="This session isn't in a discussion")
-    return StreamingResponse(
-        events(graph, request.app.state.sessions, session_id, resume_with(snapshot, {"choice": req.choice}), first_run=False),
-        media_type="text/event-stream",
-    )
+    return stream_response(graph, request.app.state.sessions, session_id, resume_with(snapshot, {"choice": req.choice}))
 
 
 @app.get("/sessions")
@@ -290,6 +328,7 @@ def get_session(session_id: uuid.UUID, request: Request) -> dict:
         "worked_faded": [turn.model_dump() for turn in values.get("worked_faded", [])],
         "discuss": [turn.model_dump() for turn in values.get("discuss", [])],
         "discussing": waiting_discussion(snapshot),
+        "episode": request.app.state.sessions.episode(session_id),
         "check_turns": [turn.model_dump() for turn in values.get("check_turns", [])],
         "check_result": check_result.model_dump() if check_result else None,
         "analogy_bridging": analogy.model_dump() if analogy else None,
@@ -313,10 +352,7 @@ def resume_session(session_id: uuid.UUID, request: Request) -> StreamingResponse
     if not stalled(snapshot):
         raise HTTPException(status_code=409, detail="Nothing to resume")
     # None as input continues from the last checkpoint, re-running only the tasks that failed
-    return StreamingResponse(
-        events(graph, request.app.state.sessions, session_id, None, first_run=False),
-        media_type="text/event-stream",
-    )
+    return stream_response(graph, request.app.state.sessions, session_id, None)
 
 
 @app.post("/sessions/{session_id}/answers")
@@ -332,10 +368,28 @@ def submit_answers(session_id: uuid.UUID, req: AnswersRequest, request: Request)
     questions = quiz["questions"]
     if len(req.answers) != len(questions) or any(a not in q["choices"] for a, q in zip(req.answers, questions)):
         raise HTTPException(status_code=422, detail="Pick one of the choices for every question")
-    return StreamingResponse(
-        events(graph, request.app.state.sessions, session_id, resume_with(snapshot, req.answers), first_run=False),
-        media_type="text/event-stream",
-    )
+    return stream_response(graph, request.app.state.sessions, session_id, resume_with(snapshot, req.answers))
+
+
+@app.post("/sessions/{session_id}/feedback", status_code=204)
+def save_feedback(session_id: uuid.UUID, req: FeedbackRequest, request: Request) -> Response:
+    """Save the student's rating of a finished session."""
+    sessions = request.app.state.sessions
+    if sessions.episode(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    snapshot, _ = state_of(request.app.state.graph, session_id)
+    if snapshot.next:
+        raise HTTPException(status_code=409, detail="This session hasn't finished")
+    sessions.set_feedback(session_id, req.liked, req.reason)
+    return Response(status_code=204)
+
+
+@app.get("/reports/methods")
+def method_report(
+    request: Request, subject: str | None = None, request_type: str | None = None
+) -> dict:
+    """How each teaching method has gone, optionally for one subject or request type."""
+    return request.app.state.sessions.method_report(subject, request_type)
 
 
 @app.delete("/sessions/{session_id}", status_code=204)

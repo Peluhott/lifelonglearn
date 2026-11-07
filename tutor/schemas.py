@@ -31,6 +31,9 @@ class IntakeResult(BaseModel):
     subject: Optional[str] = Field(
         None, description="Broad subject, e.g. 'Calculus I', 'Operating Systems'."
     )
+    category: Literal[
+        "math", "science", "computer_science", "history", "language", "arts_humanities", "business", "other"
+    ] = Field(default="other", description="The broad area this falls under.")
     target_concept: Optional[str] = Field(
         None, description="The main concept they need help with, e.g. 'chain rule'."
     )
@@ -223,6 +226,41 @@ class FollowUp(BaseModel):
     index: int = Field(description="Position of the step it was asked about (0-based).")
     question: str
     answer: str
+
+
+class Rating(BaseModel):
+    """One rubric criterion, judged after a session has finished."""
+
+    level: Literal["none", "weak", "good", "full"]
+    evidence: str = Field(description="A short quote of the student's words behind this rating, empty if there is none.")
+
+
+class SocraticRubric(BaseModel):
+    """How the student did in a Socratic dialogue."""
+
+    reached_idea: Rating
+    own_reasoning: Rating
+
+
+class FadedRubric(BaseModel):
+    """How the student did in a worked-faded session."""
+
+    later_problems: Rating
+    reasoning: Rating
+
+
+class RecallRubric(BaseModel):
+    """How the student did explaining a concept in their own words."""
+
+    accuracy: Rating
+    coverage: Rating
+
+
+class ErrorRubric(BaseModel):
+    """How the student did finding a planted mistake."""
+
+    found_mistake: Rating
+    fixed_mistake: Rating
 
 
 class DiscussReply(BaseModel):

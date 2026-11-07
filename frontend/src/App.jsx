@@ -8,12 +8,20 @@ import {
   getSession,
   listSessions,
   resumeSession,
+  sendFeedback,
   streamTutor,
   submitAnswers,
 } from './api.js'
 import './App.css'
 
 const ERROR_TEXT = 'Something went wrong. Please try again.'
+
+const FEEDBACK_REASONS = [
+  ['too_slow', 'Too slow'],
+  ['confusing', 'Confusing'],
+  ['too_much_text', 'Too much text'],
+  ['wanted_examples', 'Wanted examples'],
+]
 
 // what a text check found: the gaps, or that there weren't any
 const checkMessage = ({ passed, gaps }) => ({
@@ -36,6 +44,7 @@ function App() {
   const [pendingCheck, setPendingCheck] = useState(null) // a text check's prompt, held back the same way
   const [pendingDiscuss, setPendingDiscuss] = useState(null) // the chat's opening line, held back the same way
   const [discussing, setDiscussing] = useState(false) // the chat after a lesson is open
+  const [feedback, setFeedback] = useState(null) // { liked, liked_reason } once a session is over, null until then
   const [sessions, setSessions] = useState([]) // past sessions for the sidebar
   const [sessionId, setSessionId] = useState(null) // the session on screen, null for a new lesson
   const [inDialogue, setInDialogue] = useState(false) // a Socratic dialogue is under way, so a message answers it
@@ -146,6 +155,8 @@ function App() {
       if (data.check_type !== 'quiz') addMessage(checkMessage(data)) // a quiz shows its own results
     } else if (event === 'reexplain') {
       addMessage({ role: 'assistant', kind: 'text', content: data.text })
+    } else if (event === 'finished') {
+      setFeedback({ liked: null, liked_reason: null })
     } else if (event === 'error') {
       // after grading, the graph is stuck between nodes and needs a resume, not new answers
       addMessage({ role: 'assistant', kind: 'text', content: ERROR_TEXT, error: true, retry: gradedThisRun.current })
@@ -193,7 +204,18 @@ function App() {
     setPendingCheck(null)
     setPendingDiscuss(null)
     setDiscussing(false)
+    setFeedback(null)
     lessonShowing.current = false
+  }
+
+  const rate = async (liked, reason = null) => {
+    const previous = feedback
+    setFeedback({ liked, liked_reason: reason })
+    try {
+      await sendFeedback(sessionId, liked, reason)
+    } catch {
+      setFeedback(previous)
+    }
   }
 
   const send = async () => {
@@ -270,6 +292,7 @@ function App() {
     setInDialogue(false)
     try {
       const saved = await getSession(id)
+      if (saved.episode && !saved.in_progress) setFeedback(saved.episode)
       let rebuilt = [{ role: 'user', kind: 'text', content: saved.prompt }]
       const addTurns = (turns) => {
         for (const turn of turns) {
@@ -493,6 +516,8 @@ function App() {
               )}
 
               {finished && <Summary quizzes={quizzes} />}
+
+              {feedback && !loading && !testing && <Feedback feedback={feedback} onRate={rate} />}
 
               {status && <div className="thinking">{status}</div>}
             </div>
@@ -782,6 +807,38 @@ function Reteach({ steps, questionsReady, onContinue }) {
           </button>
         )}
       </div>
+    </div>
+  )
+}
+
+// end of a session: thumbs up or down, and the optional reason tags after a thumbs down
+function Feedback({ feedback, onRate }) {
+  const { liked, liked_reason: reason } = feedback
+
+  return (
+    <div className="msg msg-tutor feedback">
+      {liked === null && (
+        <>
+          <span>How did this lesson go?</span>
+          <button onClick={() => onRate(true)} aria-label="Thumbs up">
+            👍
+          </button>
+          <button onClick={() => onRate(false)} aria-label="Thumbs down">
+            👎
+          </button>
+        </>
+      )}
+      {liked === true && <span>Thanks!</span>}
+      {liked === false && (
+        <>
+          <span>What got in the way?</span>
+          {FEEDBACK_REASONS.map(([value, label]) => (
+            <button key={value} className={reason === value ? 'on' : ''} onClick={() => onRate(false, value)}>
+              {label}
+            </button>
+          ))}
+        </>
+      )}
     </div>
   )
 }

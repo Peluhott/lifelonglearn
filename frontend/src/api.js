@@ -1,3 +1,4 @@
+// Every stream below sends finished before done if that run ended the session.
 // where the FastAPI backend runs; override with VITE_API_URL in frontend/.env if it moves
 export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
@@ -69,10 +70,19 @@ const getJson = async (path) => (await request(path)).json()
 export const listSessions = () => getJson('/sessions')
 
 // one saved session: { id, prompt, method, plan, lessons, followups, rounds: [{ grade, reteach }], waiting, stalled,
-// socratic, worked_faded, discuss, discussing, check_turns, check_result, analogy_bridging, reexplain, in_progress }
+// socratic, worked_faded, discuss, discussing, episode, check_turns, check_result, analogy_bridging, reexplain,
+// in_progress }
 export const getSession = (id) => getJson(`/sessions/${id}`)
 
 export const deleteSession = (id) => request(`/sessions/${id}`, { method: 'DELETE' })
+
+// rate a finished session; reason is optional and only asked for after a thumbs down
+export const sendFeedback = (sessionId, liked, reason) =>
+  request(`/sessions/${sessionId}/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ liked, reason }),
+  })
 
 // a follow-up question about one lesson step (0-based index): { index, question, answer }
 export const askAboutStep = async (sessionId, index, question) =>
