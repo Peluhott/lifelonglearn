@@ -158,6 +158,7 @@ class SelectMethodResult(BaseModel):
     ] = Field(
         description="The underlying type of request, even when the student names a teaching style."
     )
+    student_asked: bool = Field(default=False, description="True only if the student named a teaching style.")
     reason: str = Field(description="One line explaining the choice.")
 
 # ---------------------------------------------------------------------------

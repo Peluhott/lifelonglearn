@@ -189,6 +189,7 @@ def events(graph, sessions, session_id: uuid.UUID, graph_input, first_run: bool)
                         teaching_method=selected.chosen_method,
                         request_type=selected.request_type,
                         task_type=intake.task_type,
+                        pick_reason=output["pick_reason"],
                     )
                     if selected.chosen_method == "structured_lesson":  # only lessons show the plan
                         yield sse("plan", plan.model_dump())
@@ -268,7 +269,7 @@ def tutor_stream(req: TutorRequest, request: Request) -> StreamingResponse:
     sessions = request.app.state.sessions
     sessions.create(session_id, req.prompt)
     # a regular (non-async) generator: FastAPI runs it in a worker thread, which suits the blocking Gemini calls
-    graph_input = {"user_prompt": req.prompt, }
+    graph_input = {"user_prompt": req.prompt, "history": sessions.recent_episodes()}
     return stream_response(request.app.state.graph, sessions, session_id, graph_input, first_run=True)
 
 
@@ -386,10 +387,10 @@ def save_feedback(session_id: uuid.UUID, req: FeedbackRequest, request: Request)
 
 @app.get("/reports/methods")
 def method_report(
-    request: Request, subject: str | None = None, request_type: str | None = None
+    request: Request, subject: str | None = None, request_type: str | None = None, pick_reason: str | None = None
 ) -> dict:
-    """How each teaching method has gone, optionally for one subject or request type."""
-    return request.app.state.sessions.method_report(subject, request_type)
+    """How each teaching method has gone, optionally for one subject, request type or reason it was picked."""
+    return request.app.state.sessions.method_report(subject, request_type, pick_reason)
 
 
 @app.delete("/sessions/{session_id}", status_code=204)

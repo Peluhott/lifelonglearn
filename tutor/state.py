@@ -16,9 +16,11 @@ from tutor.schemas import RetaughtStep
 # a shared state between agents, as we add more agents it will grow and more fields will be added
 class TutorState(TypedDict, total=False):
     user_prompt: str          # what the student typed
+    history: list[dict]       # past episodes, passed in by the API; missing in the CLI
     intake: IntakeResult      # filled in by the intake agent
     planner: PlannerResult    # filled in by the planner agent
     select_method: SelectMethodResult  # which teaching method runs, filled in by the select_method node
+    pick_reason: str          # why: "requested", "exploring", "history" or "normal"
     teacher: Annotated[list[TaughtStep], operator.add]  # one result per step, appended by the parallel teachers in any order (use .index)
     reviewer: ReviewerResult  # the questions the reviewer agent wrote, one per taught step
     socratic: Annotated[list[DialogueTurn], operator.add]  # the dialogue, shared so a finished session can reopen

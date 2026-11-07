@@ -84,6 +84,7 @@ class PostgresSessions:
                 )
                 """
             )
+            conn.execute("ALTER TABLE learning_episodes ADD COLUMN IF NOT EXISTS pick_reason text")
 
     def create(self, session_id: uuid.UUID, prompt: str) -> None:
         with self.pool.connection() as conn:
@@ -124,16 +125,17 @@ class PostgresSessions:
         teaching_method: str,
         request_type: str,
         task_type: str,
+        pick_reason: str,
     ) -> None:
         with self.pool.connection() as conn:
             conn.execute(
                 """
                 INSERT INTO learning_episodes
-                    (session_id, subject, topic, teaching_method, request_type, task_type)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                    (session_id, subject, topic, teaching_method, request_type, task_type, pick_reason)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (session_id) DO NOTHING
                 """,
-                (session_id, subject, topic, teaching_method, request_type, task_type),
+                (session_id, subject, topic, teaching_method, request_type, task_type, pick_reason),
             )
 
     def delete_episode(self, session_id: uuid.UUID) -> None:
@@ -185,14 +187,26 @@ class PostgresSessions:
                 "SELECT liked, liked_reason FROM learning_episodes WHERE session_id = %s", (session_id,)
             ).fetchone()
 
+    def recent_episodes(self, limit: int = 500) -> list[dict]:
+        """Past episodes, newest first, in the plain form tutor/history.py reads; they go into the graph's input."""
+        with self.pool.connection() as conn:
+            return conn.execute(
+                """
+                SELECT subject, teaching_method, request_type, testing_method, score, liked, liked_reason,
+                       finished_at IS NOT NULL AS finished
+                FROM learning_episodes ORDER BY created_at DESC LIMIT %s
+                """,
+                (limit,),
+            ).fetchall()
+
     def method_report(
-        self, subject: str | None = None, request_type: str | None = None
+        self, subject: str | None = None, request_type: str | None = None, pick_reason: str | None = None
     ) -> dict:
         """How each teaching method has gone. Scores are grouped by test type because they aren't comparable across types.
 
         Finish rate is reported on its own: an abandoned session has no test type, so inside a test group it'd always be 100%.
         """
-        params = {"subject": subject, "request_type": request_type}
+        params = {"subject": subject, "request_type": request_type, "pick_reason": pick_reason}
         matching = " AND ".join(f"(%({key})s::text IS NULL OR {key} = %({key})s)" for key in params)
         with self.pool.connection() as conn:
             by_test = conn.execute(
